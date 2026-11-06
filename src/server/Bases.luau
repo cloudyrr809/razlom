@@ -11,9 +11,8 @@ export type BaseInfo = {
 	index: number,
 	model: Model,
 	spawn: BasePart,
-	overflow: BasePart,
-	nests: { BasePart },
-	station: Model,
+	monolith: Model,
+	pedestals: { BasePart }, -- все 10 мест; работают первые pedestalCount
 	owner: Player?,
 }
 
@@ -29,6 +28,19 @@ end
 
 function Bases.of(session: PlayerState.Session): BaseInfo?
 	return Bases.get(session.baseIndex)
+end
+
+-- Стоит ли игрок у своего Монолита (вставлять оружие и вливать осколки можно только тут).
+function Bases.nearMonolith(session: PlayerState.Session): boolean
+	local info = Bases.of(session)
+	local character = session.player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not info or not root or not root:IsA("BasePart") or not humanoid or humanoid.Health <= 0 then
+		return false
+	end
+	local d = root.Position - info.monolith:GetPivot().Position
+	return Vector3.new(d.X, 0, d.Z).Magnitude <= Config.Monolith.Range and math.abs(d.Y) <= 15
 end
 
 local function setSign(info: BaseInfo)
@@ -61,36 +73,22 @@ function Bases.start()
 			warn("Base без Index:", model:GetFullName())
 			continue
 		end
-		local nests: { BasePart } = {}
-		for _, nest in CollectionService:GetTagged("Nest") do
-			if nest:IsA("BasePart") and nest:GetAttribute("Base") == index then
-				local k = nest:GetAttribute("Index")
+		local pedestals: { BasePart } = {}
+		for _, p in CollectionService:GetTagged("Pedestal") do
+			if p:IsA("BasePart") and p:GetAttribute("Base") == index then
+				local k = p:GetAttribute("Index")
 				if type(k) == "number" then
-					nests[k] = nest
+					pedestals[k] = p
 				end
 			end
 		end
-		local station: Model? = nil
-		for _, s in CollectionService:GetTagged("Station") do
-			if s:IsA("Model") and s:GetAttribute("Base") == index then
-				station = s
-			end
-		end
 		local spawn = model:FindFirstChild("SpawnPoint")
-		local overflow = model:FindFirstChild("Overflow")
-		if not (station and spawn and spawn:IsA("BasePart") and overflow and overflow:IsA("BasePart")) or #nests ~= 3 then
+		local monolith = model:FindFirstChild("Monolith")
+		if not (spawn and spawn:IsA("BasePart") and monolith and monolith:IsA("Model")) or #pedestals ~= Config.Monolith.MaxPedestals then
 			warn("База собрана не полностью:", model:GetFullName())
 			continue
 		end
-		list[index] = {
-			index = index,
-			model = model,
-			spawn = spawn,
-			overflow = overflow,
-			nests = nests,
-			station = station,
-			owner = nil,
-		}
+		list[index] = { index = index, model = model, spawn = spawn, monolith = monolith, pedestals = pedestals, owner = nil }
 	end
 	if #list ~= Config.Base.Count then
 		warn(`Найдено баз: {#list} из {Config.Base.Count}. Запусти tools/build_map.luau.`)
@@ -125,7 +123,6 @@ function Bases.start()
 			setSign(info)
 		end
 	end)
-
 end
 
 return Bases

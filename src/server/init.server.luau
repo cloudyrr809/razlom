@@ -1,5 +1,5 @@
 --!strict
--- Точка входа сервера «Разломов». Порядок важен: сначала данные игрока, потом системы.
+-- Точка входа сервера «Разломов». Порядок важен: сначала подписки, потом данные игрока.
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -28,14 +28,16 @@ local PlayerState = require(script.PlayerState)
 local Bases = require(script.Bases)
 local Creeps = require(script.Creeps)
 local Zones = require(script.Zones)
-local Inventory = require(script.Inventory)
+local Monolith = require(script.Monolith)
+local Arsenal = require(script.Arsenal)
 local Spheres = require(script.Spheres)
 local Combat = require(script.Combat)
 local Upgrades = require(script.Upgrades)
 
 -- Подписки «игрок вошёл» регистрируются до PlayerState.start(), чтобы никого не пропустить.
 Bases.start()
-Inventory.start()
+Monolith.start()
+Arsenal.start()
 Upgrades.start()
 Spheres.start()
 Combat.start()

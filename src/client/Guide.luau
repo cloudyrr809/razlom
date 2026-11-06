@@ -1,7 +1,9 @@
 --!strict
 -- Обучение первых минут без текста-учебника: подсказка внизу экрана,
 -- бегущие стрелки на земле от игрока к цели и маяк над целью.
--- Шаги: дорога → удар → Крупный ради Сферы → гнездо → вскрытие → Кольцо на станции.
+-- Шаги: дорога → удар → Крупный ради Сферы → «Открой» → «Вставь на базе!» → «Влей в Монолит».
+-- «Вставь на базе!» со стрелкой домой работает и после обучения — каждый раз, когда
+-- выпало оружие сильнее самого слабого в постаментах.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -24,8 +26,6 @@ local COLOR = Color3.fromRGB(120, 230, 255)
 
 local kills = 0
 local reachedRoad = false
-local openedOnce = false
-local boughtRing = false
 local finished = false
 
 type Step = { text: string, target: Vector3? }
@@ -54,6 +54,10 @@ end
 
 local function current(): Step?
 	local d = Store.data
+	-- Новое оружие сильнее вставленного — домой, всегда.
+	if Store.betterWaiting() then
+		return { text = "Вставь на базе! Новое оружие сильнее", target = World.monolith(nil) }
+	end
 	if finished then
 		return nil
 	end
@@ -63,24 +67,17 @@ local function current(): Step?
 	if kills == 0 then
 		return { text = `{hitWord()} рядом с крипом — бей!`, target = nearestCreep(nil) }
 	end
-	if not openedOnce then
-		for k in Store.reveals do
-			local nest = World.nest(d.baseIndex, k)
-			return { text = `{hitWord()} по Сфере, пока не расколется!`, target = nest and nest.Position }
-		end
-		if #d.storage > 0 then
-			local nest = World.nest(d.baseIndex, 1)
-			return { text = "Сфера ждёт на базе — вскрой её в гнезде (бесплатно)", target = nest and nest.Position }
+	if d.opened == 0 then
+		if #d.spheres > 0 then
+			return { text = "Сфера у тебя! Жми «Открыть» слева", target = nil }
 		end
 		return { text = "Бей Крупных крипов — из них падают Сферы с оружием", target = nearestCreep(3) }
 	end
-	if not boughtRing then
-		local price = math.min(Formulas.upgradeCost("Ring", d.ring), Formulas.upgradeCost("Aura", d.aura))
-		local station = World.station(d.baseIndex)
-		if d.shards >= price and station then
-			return { text = "Купи Ауру или Кольцо на станции — станешь быстрее", target = station:GetPivot().Position }
+	if d.monolithLevel == 0 then
+		if d.shards >= Formulas.monolithCost(0) then
+			return { text = "Влей осколки в Монолит — урон вырастет", target = World.monolith(nil) }
 		end
-		return { text = `Собери {Formulas.short(price)} осколков на первое улучшение`, target = nil }
+		return { text = `Собери {Formulas.short(Formulas.monolithCost(0))} осколков и влей их в Монолит`, target = nil }
 	end
 	finished = true
 	return nil
@@ -168,16 +165,6 @@ function Guide.start()
 			kills += 1
 		end
 	end)
-	;(remotes:WaitForChild("RevealFx") :: RemoteEvent).OnClientEvent:Connect(function(kind: string, _b: number, _n: number, data: any)
-		if kind == "done" and data.owner == player.UserId then
-			openedOnce = true
-		end
-	end)
-	Store.onChanged(function(section)
-		if section == "levels" and (Store.data.ring > 0 or Store.data.aura > 0) then
-			boughtRing = true
-		end
-	end)
 
 	local step: Step? = nil
 	task.spawn(function()
@@ -187,7 +174,11 @@ function Guide.start()
 				reachedRoad = true
 			end
 			step = current()
-			hint.Visible = step ~= nil
+			-- Пока на экране Сфера — подсказку не показываем.
+			local reveal = player.PlayerGui:FindFirstChild("Reveal")
+			local revealRoot = reveal and reveal:FindFirstChild("Root")
+			local busy = revealRoot ~= nil and revealRoot:IsA("GuiObject") and revealRoot.Visible
+			hint.Visible = step ~= nil and not busy
 			if step then
 				text.Text = step.text
 			end

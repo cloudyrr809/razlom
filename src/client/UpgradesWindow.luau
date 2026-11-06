@@ -1,6 +1,5 @@
 --!strict
--- Станция улучшений: две карточки (Аура, Кольцо) — уровень, что даст следующий, цена, «+1» и «Макс».
--- Открывается сама у своей станции. Покупку решает сервер.
+-- Улучшения: Кольцо и Аура. Открываются где угодно из кнопки «Улучшения». Покупку решает сервер.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -12,48 +11,62 @@ local Window = require(script.Parent.Window)
 
 local buyRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BuyUpgrade") :: RemoteEvent
 
-local StationWindow = {}
+local UpgradesWindow = {}
 local win: Window.Win
 
 local function fmt(x: number): string
 	return (string.gsub(string.format("%.2f", x):gsub("0+$", ""):gsub("%.$", ""), "%.", ","))
 end
 
-function StationWindow.get(): Window.Win
-	return win
+local function ownedOf(id: string): number
+	return if id == "Ring" then Store.data.ring else Store.data.aura
 end
 
-function StationWindow.start()
-	win = Window.new("Station", "Станция", 320, 380, "side")
-	local row = Theme.frame("Cards", win.content, {
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
-	})
+-- Хватает ли осколков хотя бы на один уровень (кнопка в HUD пульсирует).
+function UpgradesWindow.affordable(): boolean
+	for _, id in { "Ring", "Aura" } do
+		local uid = id :: any
+		local owned = ownedOf(id)
+		if owned < Formulas.upgradeCap(uid, Store.data.openZones) and Store.data.shards >= Formulas.upgradeCost(uid, owned) then
+			return true
+		end
+	end
+	return false
+end
+
+function UpgradesWindow.toggle()
+	if win.isOpen() then
+		win.close()
+	else
+		win.open()
+	end
+end
+
+function UpgradesWindow.start()
+	win = Window.new("Upgrades", "Улучшения", 340, 380, "side")
+	local column = Theme.frame("Cards", win.content, { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 })
 	local layout = Instance.new("UIListLayout")
-	layout.FillDirection = Enum.FillDirection.Vertical
 	layout.Padding = UDim.new(0, 12)
-	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	layout.Parent = row
+	layout.Parent = column
 
-	type Card = { level: TextLabel, effect: TextLabel, price: TextLabel, one: TextButton, max: TextButton }
+	type Card = { level: TextLabel, info: TextLabel, one: TextButton, max: TextButton }
 	local cards: { [string]: Card } = {}
-
-	local upgradeIds: { Formulas.UpgradeId } = { "Ring", "Aura" }
-	for i, id in upgradeIds do
-		local u = Config.Upgrades[id]
-		local card = Theme.frame(id, row, {
+	for i, id in { "Ring", "Aura" } do
+		local u = (Config.Upgrades :: any)[id]
+		local accent = if id == "Ring" then Color3.fromRGB(255, 200, 80) else Color3.fromRGB(90, 200, 255)
+		local card = Theme.frame(id, column, {
 			Size = UDim2.new(1, 0, 0.5, -6),
 			BackgroundColor3 = Theme.Color.PanelSoft,
 			LayoutOrder = i,
 		})
 		Theme.corner(card)
 		Theme.padding(card, 10)
-		Theme.stroke(card, if id == "Ring" then Color3.fromRGB(255, 200, 80) else Color3.fromRGB(90, 200, 255), 2)
+		Theme.stroke(card, accent, 2)
 		Theme.text("Name", card, u.name, 22, {
 			Size = UDim2.new(0.5, 0, 0, 24),
 			Font = Theme.Display,
 			TextXAlignment = Enum.TextXAlignment.Left,
-			TextColor3 = if id == "Ring" then Color3.fromRGB(255, 210, 110) else Color3.fromRGB(120, 210, 255),
+			TextColor3 = accent,
 		})
 		Theme.text("What", card, if id == "Ring" then "скорость атаки" else "скорость бега", 14, {
 			Size = UDim2.new(0.5, 0, 0, 24),
@@ -61,34 +74,30 @@ function StationWindow.start()
 			TextXAlignment = Enum.TextXAlignment.Right,
 			TextColor3 = Theme.Color.TextDim,
 		})
-		local level = Theme.text("Level", card, "", 18, {
+		local level = Theme.text("Level", card, "", 17, {
 			Size = UDim2.new(1, 0, 0, 22),
-			Position = UDim2.fromOffset(0, 26),
+			Position = UDim2.fromOffset(0, 28),
 			TextXAlignment = Enum.TextXAlignment.Left,
+			Font = Theme.Display,
 		})
-		local effect = Theme.text("Effect", card, "", 18, {
-			Size = UDim2.new(1, 0, 0, 22),
-			Position = UDim2.fromOffset(0, 46),
+		local info = Theme.text("Info", card, "", 14, {
+			Size = UDim2.new(1, 0, 0, 20),
+			Position = UDim2.fromOffset(0, 50),
 			TextXAlignment = Enum.TextXAlignment.Left,
-			TextColor3 = Theme.Color.Good,
-		})
-		local price = Theme.text("Price", card, "", 18, {
-			Visible = false,
-			Size = UDim2.new(1, 0, 0, 22),
-			Position = UDim2.fromOffset(0, 70),
-			TextXAlignment = Enum.TextXAlignment.Left,
-			TextColor3 = Theme.Color.Shards,
+			TextColor3 = Theme.Color.TextDim,
 		})
 		local one = Theme.button("BuyOne", card, "+1", "primary", {
 			Size = UDim2.new(0.5, -4, 0, 42),
 			Position = UDim2.new(0, 0, 1, -42),
-			TextSize = 22,
+			Font = Theme.Display,
+			TextSize = 18,
 		})
 		local max = Theme.button("BuyMax", card, "Макс", "secondary", {
 			Size = UDim2.new(0.5, -4, 0, 42),
 			Position = UDim2.new(1, 0, 1, -42),
 			AnchorPoint = Vector2.new(1, 0),
-			TextSize = 18,
+			Font = Theme.Display,
+			TextSize = 16,
 		})
 		one.Activated:Connect(function()
 			if one.Active then
@@ -100,30 +109,30 @@ function StationWindow.start()
 				buyRemote:FireServer(id, true)
 			end
 		end)
-		cards[id] = { level = level, effect = effect, price = price, one = one, max = max }
+		cards[id] = { level = level, info = info, one = one, max = max }
 	end
 
 	local function render()
 		local d = Store.data
 		for id, c in cards do
-			local uid: Formulas.UpgradeId = if id == "Ring" then "Ring" else "Aura"
-			local owned = if uid == "Ring" then d.ring else d.aura
+			local uid = id :: any
+			local owned = ownedOf(id)
 			local cap = Formulas.upgradeCap(uid, d.openZones)
-			local function value(level: number): number
-				return if uid == "Ring" then Formulas.hitsPerSecond(level) else Formulas.walkSpeed(level)
+			local function value(l: number): number
+				return if id == "Ring" then Formulas.hitsPerSecond(l) else Formulas.walkSpeed(l)
 			end
-			local unit = if uid == "Ring" then " уд/с" else ""
+			local unit = if id == "Ring" then " уд/с" else ""
 			if owned >= cap then
 				c.level.Text = `Ур. {owned}/{cap} · {fmt(value(owned))}{unit}`
-				c.effect.Text = "Потолок: открой следующую зону"
+				c.info.Text = "Потолок: открой следующую зону"
 				c.one.Text = "+1"
+				c.max.Text = "Макс"
 				Theme.setEnabled(c.one, false)
 				Theme.setEnabled(c.max, false)
-				c.max.Text = "Макс"
 			else
 				local price = Formulas.upgradeCost(uid, owned)
 				c.level.Text = `Ур. {owned}/{cap} · {fmt(value(owned))} → {fmt(value(owned + 1))}{unit}`
-				c.effect.Text = ""
+				c.info.Text = `Потолок растёт с каждой открытой зоной`
 				c.one.Text = "+1 · " .. Formulas.short(price)
 				Theme.setEnabled(c.one, d.shards >= price)
 				local n, total = Formulas.upgradeMax(uid, owned, d.shards, d.openZones)
@@ -144,4 +153,4 @@ function StationWindow.start()
 	end)
 end
 
-return StationWindow
+return UpgradesWindow

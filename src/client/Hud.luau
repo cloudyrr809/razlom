@@ -1,8 +1,9 @@
 --!strict
 -- Постоянный экран. Центр свободен для боя:
---   сверху — осколки и полоска до ближайшей покупки;
---   слева — Сферы на складе и три гнезда;
---   справа — круглые кнопки; снизу справа на телефоне — большая кнопка «Удар».
+--   сверху — осколки, серия убийств, уровень Монолита и сколько до следующего;
+--   слева — Сферы со счётчиком и кнопкой «Открыть», урон арсенала;
+--   справа — круглые кнопки «Оружие» и «Улучшения» (пульсирует, когда хватает на уровень);
+--   снизу справа на телефоне — большая кнопка «Удар».
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -21,9 +22,21 @@ local Input = require(script.Parent.Input)
 local Hud = {}
 local player = Players.LocalPlayer
 
-local openInventory: () -> () = function() end
-function Hud.onInventory(fn: () -> ())
-	openInventory = fn
+local actions: { [string]: () -> () } = {}
+function Hud.on(name: string, fn: () -> ())
+	actions[name] = fn
+end
+local function run(name: string)
+	local fn = actions[name]
+	if fn then
+		fn()
+	end
+end
+local affordable: () -> boolean = function()
+	return false
+end
+function Hud.setAffordable(fn: () -> boolean)
+	affordable = fn
 end
 
 local function glowStroke(parent: GuiObject, a: Color3, b: Color3, thickness: number)
@@ -33,7 +46,6 @@ local function glowStroke(parent: GuiObject, a: Color3, b: Color3, thickness: nu
 	g.Parent = s
 	return s
 end
-Hud.glowStroke = glowStroke
 
 -- Значок осколка: повёрнутый ромб с переливом.
 function Hud.gem(parent: Instance, px: number, position: UDim2): Frame
@@ -69,7 +81,7 @@ local function roundButton(name: string, parent: Instance, icon: string, caption
 	b.Parent = parent
 	Theme.corner(b, UDim.new(0.5, 0))
 	glowStroke(b, Color3.fromRGB(90, 220, 255), Color3.fromRGB(180, 110, 255), 3)
-	Theme.text("Icon", b, icon, px * 0.42, {
+	Theme.text("Icon", b, icon, px * 0.4, {
 		Size = UDim2.fromScale(1, 0.62),
 		Position = UDim2.fromScale(0, 0.08),
 		Font = Theme.Display,
@@ -94,28 +106,28 @@ local function roundButton(name: string, parent: Instance, icon: string, caption
 	return b
 end
 
--- Ближайшая покупка: то улучшение, до которого меньше всего осталось.
-local function nextPurchase(): (string, number, boolean)
-	local d = Store.data
-	local best: string? = nil
-	local bestFrac = -1
-	local upgradeIds: { Formulas.UpgradeId } = { "Ring", "Aura" }
-	for _, id in upgradeIds do
-		local owned = ({ Ring = d.ring, Aura = d.aura } :: { [string]: number })[id]
-		local uid = id :: any
-		if owned < Formulas.upgradeCap(uid, d.openZones) then
-			local price = Formulas.upgradeCost(uid, owned)
-			local frac = math.min(1, d.shards / price)
-			if frac > bestFrac then
-				bestFrac = frac
-				best = `{Config.Upgrades[id].name} ур. {owned + 1}`
-			end
-		end
+local shardsBounce: UIScale? = nil
+-- Подпрыгивание счётчика осколков (зовут эффекты при добыче).
+function Hud.bounceShards()
+	if shardsBounce then
+		shardsBounce.Scale = 1.18
+		Theme.tween(shardsBounce, TweenInfo.new(0.22, Enum.EasingStyle.Back), { Scale = 1 })
 	end
-	if not best then
-		return "Потолок: открой следующую зону", 1, true
+end
+
+local streakSteps, streakUntil = 0, 0
+function Hud.setStreak(steps: number, mult: number)
+	streakSteps = steps
+	streakUntil = os.clock() + Config.Streak.Window
+	local _ = mult
+end
+
+local spheresIcon: Frame? = nil
+function Hud.spheresIconPosition(): Vector2?
+	if spheresIcon then
+		return spheresIcon.AbsolutePosition + spheresIcon.AbsoluteSize / 2
 	end
-	return best, bestFrac, false
+	return nil
 end
 
 function Hud.start()
@@ -124,9 +136,9 @@ function Hud.start()
 	gui.ResetOnSpawn = false
 	gui.ScreenInsets = Enum.ScreenInsets.CoreUISafeInsets
 
-	-- Сверху: осколки ------------------------------------------------------
+	-- Сверху: осколки, серия, Монолит ------------------------------------------
 	local top = Theme.frame("Top", gui, {
-		Size = UDim2.fromOffset(260, 84),
+		Size = UDim2.fromOffset(280, 110),
 		Position = UDim2.new(0.5, 0, 0, 4),
 		AnchorPoint = Vector2.new(0.5, 0),
 		BackgroundTransparency = 1,
@@ -148,10 +160,22 @@ function Hud.start()
 	})
 	local bounce = Instance.new("UIScale")
 	bounce.Parent = pill
+	shardsBounce = bounce
 
-	local barBack = Theme.frame("NextBar", top, {
+	local streakText = Theme.text("Streak", top, "", 20, {
+		Size = UDim2.new(1, 0, 0, 22),
+		Position = UDim2.fromOffset(0, 48),
+		Font = Theme.Display,
+		TextColor3 = Theme.Color.Crit,
+		TextStrokeTransparency = 0.2,
+		Visible = false,
+	})
+	local streakScale = Instance.new("UIScale")
+	streakScale.Parent = streakText
+
+	local barBack = Theme.frame("MonolithBar", top, {
 		Size = UDim2.fromOffset(240, 12),
-		Position = UDim2.new(0.5, 0, 0, 54),
+		Position = UDim2.new(0.5, 0, 0, 74),
 		AnchorPoint = Vector2.new(0.5, 0),
 		BackgroundColor3 = Color3.fromRGB(16, 14, 26),
 		BackgroundTransparency = 0.2,
@@ -167,19 +191,19 @@ function Hud.start()
 	local fillGrad = Instance.new("UIGradient")
 	fillGrad.Color = ColorSequence.new(Color3.fromRGB(80, 220, 255), Color3.fromRGB(190, 110, 255))
 	fillGrad.Parent = barFill
-	local nextText = Theme.text("NextPurchase", top, "", 14, {
+	local monoText = Theme.text("Monolith", top, "", 14, {
 		Size = UDim2.new(1, 40, 0, 16),
-		Position = UDim2.new(0.5, 0, 0, 68),
+		Position = UDim2.new(0.5, 0, 0, 88),
 		AnchorPoint = Vector2.new(0.5, 0),
 		Font = Theme.Display,
 		TextColor3 = Theme.Color.TextDim,
 		TextStrokeTransparency = 0.5,
 	})
 
-	-- Слева: Сферы и гнёзда --------------------------------------------------
+	-- Слева: Сферы и урон арсенала ---------------------------------------------
 	local left = Theme.frame("Spheres", gui, {
 		Size = UDim2.fromOffset(150, 58),
-		Position = UDim2.new(0, 8, 0.4, 0),
+		Position = UDim2.new(0, 8, 0.38, 0),
 		AnchorPoint = Vector2.new(0, 0.5),
 		BackgroundTransparency = 0.1,
 	})
@@ -191,46 +215,41 @@ function Hud.start()
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BackgroundTransparency = 0,
 	})
+	spheresIcon = orb
 	Theme.corner(orb, UDim.new(0.5, 0))
 	local orbGrad = Instance.new("UIGradient")
 	orbGrad.Color = ColorSequence.new(Color3.fromRGB(225, 165, 105), Color3.fromRGB(120, 76, 50))
 	orbGrad.Rotation = 60
 	orbGrad.Parent = orb
-	Theme.text("Crack", orb, "✦", 22, {
-		Size = UDim2.fromScale(1, 1),
-		TextColor3 = Color3.fromRGB(255, 200, 90),
-		Font = Theme.Display,
-	})
-	local storageText = Theme.text("Count", left, "0/10", 26, {
-		Size = UDim2.new(1, -60, 0, 30),
-		Position = UDim2.fromOffset(58, 4),
+	local orbScale = Instance.new("UIScale")
+	orbScale.Parent = orb
+	local countText = Theme.text("Count", left, "x0", 28, {
+		Size = UDim2.new(1, -60, 1, 0),
+		Position = UDim2.fromOffset(58, 0),
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Font = Theme.Display,
 	})
-	local dots: { Frame } = {}
-	for k = 1, 3 do
-		local dot = Theme.frame("Nest" .. k, left, {
-			Size = UDim2.fromOffset(12, 12),
-			Position = UDim2.fromOffset(60 + (k - 1) * 18, 36),
-			BackgroundColor3 = Theme.Color.Secondary,
-			BackgroundTransparency = 0,
-		})
-		Theme.corner(dot, UDim.new(0.5, 0))
-		dots[k] = dot
-	end
-	local full = Theme.text("Full", gui, "Склад полон", 16, {
-		Size = UDim2.fromOffset(220, 20),
-		Position = UDim2.new(0, 14, 0.4, 34),
+	local openButton = Theme.button("Open", gui, "Открыть", "primary", {
+		Size = UDim2.fromOffset(150, 40),
+		Position = UDim2.new(0, 8, 0.38, 36),
+		Font = Theme.Display,
+		TextSize = 20,
+	})
+	Theme.corner(openButton, UDim.new(0.5, 0))
+	openButton.Activated:Connect(function()
+		run("open")
+	end)
+	local arsenalText = Theme.text("Arsenal", gui, "", 18, {
+		Size = UDim2.fromOffset(220, 22),
+		Position = UDim2.new(0, 12, 0.38, 82),
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Font = Theme.Display,
-		TextColor3 = Theme.Color.Bad,
 		TextStrokeTransparency = 0.3,
-		Visible = false,
 	})
 
 	-- Справа: круглые кнопки ------------------------------------------------
 	local right = Theme.frame("Buttons", gui, {
-		Size = UDim2.fromOffset(74, 160),
+		Size = UDim2.fromOffset(74, 170),
 		Position = UDim2.new(1, -8, 0.4, 0),
 		AnchorPoint = Vector2.new(1, 0.5),
 		BackgroundTransparency = 1,
@@ -241,14 +260,22 @@ function Hud.start()
 	list.VerticalAlignment = Enum.VerticalAlignment.Center
 	list.Parent = right
 	local invButton = roundButton("Inventory", right, "⚔", "Оружие", 70)
+	invButton.LayoutOrder = 1
 	invButton.Activated:Connect(function()
-		openInventory()
+		run("inventory")
 	end)
+	local upButton = roundButton("Upgrades", right, "⬆", "Улучшения", 70)
+	upButton.LayoutOrder = 2
+	upButton.Activated:Connect(function()
+		run("upgrades")
+	end)
+	local upScale = upButton:FindFirstChildOfClass("UIScale") :: UIScale
+	local upStroke = upButton:FindFirstChildOfClass("UIStroke") :: UIStroke
 
 	-- Стрелка к Золотому и более редкому мутанту.
 	local pointer = Theme.frame("MutantPointer", gui, {
 		Size = UDim2.fromOffset(280, 30),
-		Position = UDim2.new(0.5, 0, 0, 92),
+		Position = UDim2.new(0.5, 0, 0, 116),
 		AnchorPoint = Vector2.new(0.5, 0),
 		BackgroundTransparency = 1,
 		Visible = false,
@@ -286,44 +313,57 @@ function Hud.start()
 	refreshAttack()
 
 	-- Обновление по данным ----------------------------------------------------
-	local lastShards = 0
+	local lastSpheres = 0
 	local function refresh(section: string)
 		local d = Store.data
-		if section == "wallet" or section == "levels" then
+		if section == "wallet" then
 			shardsText.Text = Formulas.short(d.shards)
-			local label, frac, capped = nextPurchase()
-			if capped then
-				nextText.Text = label
-			elseif frac >= 1 then
-				nextText.Text = label .. " — можно купить!"
-			else
-				nextText.Text = `{label} — {math.floor(frac * 100)}%`
-			end
-			nextText.TextColor3 = if frac >= 1 and not capped then Theme.Color.Good else Theme.Color.TextDim
-			Theme.tween(barFill, TweenInfo.new(0.25), { Size = UDim2.fromScale(frac, 1) })
-			if d.shards > lastShards then
-				bounce.Scale = 1.14
-				Theme.tween(bounce, TweenInfo.new(0.22, Enum.EasingStyle.Back), { Scale = 1 })
-			end
-			lastShards = d.shards
+		end
+		if section == "monolith" or section == "wallet" then
+			local cost = Formulas.monolithCost(d.monolithLevel)
+			Theme.tween(barFill, TweenInfo.new(0.25), { Size = UDim2.fromScale(math.clamp(d.monolithProgress / cost, 0, 1), 1) })
+			local need = math.max(0, cost - d.monolithProgress)
+			monoText.Text = if d.shards >= need
+				then `Монолит ур. {d.monolithLevel} · хватает на уровень — влей на базе!`
+				else `Монолит ур. {d.monolithLevel} · до следующего {Formulas.short(need)}`
+			monoText.TextColor3 = if d.shards >= need then Theme.Color.Good else Theme.Color.TextDim
 		end
 		if section == "spheres" then
-			storageText.Text = `{#d.storage}/{Config.Spheres.StorageSize}`
-			full.Visible = d.overflow > 0 or #d.storage >= Config.Spheres.StorageSize
-			full.Text = if d.overflow > 0 then `Склад полон · +{d.overflow} у базы` else "Склад полон"
-		end
-		if section == "reveals" then
-			for k, dot in dots do
-				dot.BackgroundColor3 = if Store.reveals[k] then Theme.Color.Accent else Theme.Color.Secondary
+			countText.Text = "x" .. #d.spheres
+			openButton.Visible = #d.spheres > 0
+			if #d.spheres > lastSpheres then
+				orbScale.Scale = 1.35
+				Theme.tween(orbScale, TweenInfo.new(0.3, Enum.EasingStyle.Back), { Scale = 1 })
 			end
+			lastSpheres = #d.spheres
+		end
+		if section == "arsenal" or section == "monolith" then
+			arsenalText.Text = `⚔ Урон удара {Formulas.short(Store.hitDamage())}`
 		end
 	end
 	Store.onChanged(refresh)
-	for _, s in { "wallet", "spheres", "reveals" } do
+	for _, s in { "wallet", "monolith", "spheres", "arsenal" } do
 		refresh(s)
 	end
 
 	RunService.RenderStepped:Connect(function()
+		local t = os.clock()
+		-- Серия убийств.
+		local streakOn = streakSteps > 0 and t < streakUntil
+		streakText.Visible = streakOn
+		if streakOn then
+			streakText.Text = `Серия {streakSteps} · осколки ×{(string.gsub(string.format("%.2f", Formulas.streakMult(streakSteps)), "%.", ","))}`
+			streakText.TextTransparency = math.clamp(1 - (streakUntil - t) / Config.Streak.Window, 0, 0.7)
+		end
+		-- Пульс «Улучшений», когда хватает на уровень.
+		if affordable() then
+			upScale.Scale = 1 + math.sin(t * 6) * 0.06
+			upStroke.Thickness = 4
+		else
+			upScale.Scale = 1
+			upStroke.Thickness = 3
+		end
+
 		local root = World.root()
 		local folder = Workspace:FindFirstChild("Creeps")
 		local camera = Workspace.CurrentCamera

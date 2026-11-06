@@ -27,7 +27,8 @@ end
 function Formulas.creepShards(zone: number, size: number, mutation: number): number
 	local s = Config.Creeps.Sizes[size]
 	local m = Config.CreepMutations[mutation]
-	return s.reward * zoneOf(zone).rewardMult * (if m then m.shards else 1)
+	local z = zoneOf(zone)
+	return s.reward * Config.Creeps.ShardGrowth ^ (zone - 1) * z.shardBonus * (if m then m.shards else 1)
 end
 
 -- Сколько HP в секунду восстанавливает крип.
@@ -35,27 +36,27 @@ function Formulas.regenPerSecond(maxHp: number): number
 	return maxHp * Config.Creeps.RegenPerSecond
 end
 
--- Шанс Сферы с крипа (без учёта гарантий первого Крупного).
-function Formulas.sphereChance(size: number, mutation: number): number
+-- Шанс Сферы с крипа (без учёта гарантии первого Крупного).
+function Formulas.sphereChance(zone: number, size: number, mutation: number): number
 	local m = Config.CreepMutations[mutation]
 	if m and m.guaranteedSphere then
 		return 1
 	end
-	local chance = Config.Creeps.Sizes[size].sphereChance * (if m then m.sphereChanceMult else 1)
+	local chance = Config.Creeps.Sizes[size].sphereChance * zoneOf(zone).sphereBonus * (if m then m.sphereChanceMult else 1)
 	return math.min(chance, 1)
 end
 
 -- Оружие --------------------------------------------------------------------
 
 function Formulas.weaponDamage(w: Weapon): number
-	local base = Config.WeaponDamage[w.zone][w.rarity]
+	local base = Config.Weapons.ZoneGrowth ^ (w.zone - 1) * Config.Rarities[w.rarity].mult
 	local m = Config.WeaponMutations[w.mutation]
 	return base * (if m then m.mult else 1)
 end
 
 function Formulas.weaponName(w: Weapon): string
 	if w.id == "starter" then
-		return Config.StarterWeaponName
+		return Config.Weapons.StarterName
 	end
 	local r = Config.Rarities[w.rarity]
 	local m = Config.WeaponMutations[w.mutation]
@@ -65,9 +66,20 @@ function Formulas.weaponName(w: Weapon): string
 	return (if r.weaponFem then m.nameFem else m.name) .. " " .. string.lower(r.weapon)
 end
 
--- Общий множитель урона. В Шаге 2 сюда добавятся индекс и уровень Монолита.
-function Formulas.damageBonus(bonusPercent: number): number
-	return 1 + bonusPercent / 100
+-- Множитель урона: 1 + индекс% + уровень Монолита × 2%.
+function Formulas.damageBonus(monolithLevel: number, indexPercent: number): number
+	return 1 + indexPercent / 100 + monolithLevel * Config.Monolith.DamagePerLevel
+end
+
+-- Урон одного удара (без крита) по сумме урона оружия в постаментах.
+function Formulas.hitDamage(arsenal: number, monolithLevel: number, indexPercent: number): number
+	return arsenal * Formulas.damageBonus(monolithLevel, indexPercent)
+end
+
+-- Сколько прогресса Монолиту даёт скормленное оружие (в осколках).
+function Formulas.feedValue(w: Weapon): number
+	local m = Config.WeaponMutations[w.mutation]
+	return Config.Monolith.FeedMult * Formulas.creepShards(w.zone, 2, 0) * Config.Rarities[w.rarity].mult * (if m then m.mult else 1)
 end
 
 -- Средний вклад критов в урон: 1 + шанс × (множитель − 1). При 10% и ×3 это 1,2.
@@ -106,12 +118,29 @@ function Formulas.upgradeMax(id: UpgradeId, owned: number, money: number, openZo
 	return EconomyMath.maxAffordable(u.baseCost, u.costGrowth, owned, money, Formulas.upgradeCap(id, openZones))
 end
 
--- Сферы ---------------------------------------------------------------------
+-- Монолит и серия --------------------------------------------------------
 
-function Formulas.openPrice(zone: number): number
-	local s = Config.Spheres
-	return s.OpenBase * s.OpenGrowth ^ (zone - 1)
+function Formulas.monolithCost(level: number): number
+	local m = Config.Monolith
+	return EconomyMath.levelCost(m.BaseCost, m.CostGrowth, level)
 end
+
+function Formulas.pedestalCount(monolithLevel: number): number
+	local m = Config.Monolith
+	return math.min(m.MaxPedestals, m.BasePedestals + math.floor(monolithLevel / m.LevelsPerTier))
+end
+
+function Formulas.tier(monolithLevel: number): number
+	return math.floor(monolithLevel / Config.Monolith.LevelsPerTier) + 1
+end
+
+-- Множитель осколков от серии убийств: 1 + 5% за ступень, до ×2.
+function Formulas.streakMult(steps: number): number
+	local s = Config.Streak
+	return 1 + s.StepBonus * math.clamp(steps, 0, s.MaxSteps)
+end
+
+-- Сферы -----------------------------------------------------------------------
 
 -- Шансы мутации оружия в Сфере с данным усилением: [номер мутации] = шанс.
 function Formulas.weaponMutationChances(boost: number): { number }

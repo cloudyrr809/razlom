@@ -29,12 +29,11 @@ local function holding(): boolean
 	return next(holdSources) ~= nil
 end
 
-local function revealTarget(): number?
-	local k = World.nearNest(Config.Base.NestRange - 0.5)
-	if k and Store.reveals[k] then
-		return k
-	end
-	return nil
+Input.onRevealHit = function() end
+
+-- Пока на экране Сфера, все удары идут по ней (это задаёт RevealScreen).
+Input.revealing = function(): boolean
+	return false
 end
 
 -- Есть ли крип в радиусе удара (по позициям, которые видит клиент, с запасом).
@@ -74,11 +73,10 @@ local function tryFire(): boolean
 	if t < nextAt then
 		return false
 	end
-	local nest = revealTarget()
-	if nest then
+	if Input.revealing() then
 		nextAt = t + 1 / Config.Spheres.RevealRate * 1.05
-		revealRemote:FireServer(nest)
-		swing()
+		revealRemote:FireServer()
+		Input.onRevealHit()
 		return true
 	end
 	if not creepInRange() then

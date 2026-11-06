@@ -200,7 +200,7 @@ local function updateView(v: View, t: number)
 	local squash = 0
 	if t < v.squashUntil then
 		local k = 1 - (v.squashUntil - t) / SQUASH_TIME
-		squash = math.sin(k * math.pi) * 0.28
+		squash = if k > 0 then math.sin(k * math.pi) * 0.28 else 0 -- до этого — хит-стоп
 	end
 	if v.body then
 		v.body.Scale = Vector3.new(1 + squash * 0.6, 1 + breathe - squash, 1 + squash * 0.6)
@@ -331,13 +331,32 @@ local function burst(pos: Vector3, colors: { Color3 }, count: number, sizeFrom: 
 end
 CreepFx.burst = burst
 
+-- Хит-стоп: анимации своего персонажа на миг замирают — удар ощущается «весомым».
+local function hitStop()
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		return
+	end
+	local tracks = animator:GetPlayingAnimationTracks()
+	for _, tr in tracks do
+		tr:AdjustSpeed(0)
+	end
+	task.delay(Config.Juice.HitStop, function()
+		for _, tr in tracks do
+			tr:AdjustSpeed(1)
+		end
+	end)
+end
+
 local function onHit(creepId: number, damage: number, crit: boolean, attacker: number)
 	local v = views[creepId]
 	if not v then
 		return
 	end
 	v.lastHit = os.clock()
-	v.squashUntil = os.clock() + SQUASH_TIME
+	v.squashUntil = os.clock() + Config.Juice.HitStop + SQUASH_TIME
 	local top = v.root.Position + Vector3.new(0, v.root.Size.Y / 2 + 0.5, 0)
 	local mine = attacker == player.UserId
 	local zone = math.max(1, num(v.model, "Zone"))
@@ -347,6 +366,7 @@ local function onHit(creepId: number, damage: number, crit: boolean, attacker: n
 		floatText(top, Formulas.short(damage), if mine then Color3.fromRGB(255, 255, 255) else Theme.Color.TextDim, false)
 	end
 	if mine then
+		hitStop()
 		flash(v.model, if crit then Theme.Color.Crit else Color3.new(1, 1, 1))
 		playSound(if crit then SOUND_CRIT else SOUND_HIT, if crit then 0.5 else 0.22, if crit then 1.4 else 0.9 + math.random() * 0.25, v.root)
 		burst(top - Vector3.new(0, 1, 0), { Palette.Zones[zone].sand, Palette.Zones[zone].glow }, if crit then 14 else 5, 0.5, 14)
@@ -363,10 +383,16 @@ local function onKill(info: any)
 	local zone, size = info.zone :: number, info.size :: number
 	local colors = Palette.Zones[zone] or Palette.Zones[1]
 	burst(info.pos, { colors.sand, colors.sandDark }, 16 + size * 12, 0.8 + size * 0.3, 18)
+	local mutation = info.mutation :: number
+	if mutation > 0 then
+		-- Мутант умирает взрывом осколков своего цвета.
+		burst(info.pos, { Palette.Mutation[mutation], Color3.new(1, 1, 1) }, 40 + mutation * 20, 1.2, 30)
+		chips(info.pos + Vector3.new(0, 2, 0), nil, 8 + mutation * 4, Palette.Mutation[mutation], 1)
+	end
 	if info.killer == player.UserId then
 		local root = World.root()
 		if root then
-			chips(info.pos + Vector3.new(0, 1, 0), root.Position, math.clamp(3 + size * 3, 3, 14), Theme.Color.Shards, 0.75)
+			chips(info.pos + Vector3.new(0, 1, 0), root.Position, math.clamp(3 + size * 3, 3, 14), Theme.Color.Shards, Config.Juice.MagnetTime)
 		end
 		floatText(info.pos + Vector3.new(0, 3.5, 0), "+" .. Formulas.short(info.shards), Theme.Color.Shards, true)
 		if size == 3 then

@@ -1,6 +1,6 @@
 --!strict
--- События и показуха: надпись зоны со вспышкой, всплывающие сообщения, полёт Сферы на базу,
--- трещины и перебор цветов при вскрытии, оружие над гнездом.
+-- События и показуха: надпись зоны со вспышкой, всплывающие сообщения, Сфера улетает в иконку,
+-- звук серии убийств, луч от постамента к Монолиту и «Урон +N%», река осколков в Монолит.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -11,19 +11,21 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local Formulas = require(ReplicatedStorage.Shared.Formulas)
 local Models = require(ReplicatedStorage.Shared.Models)
 local Palette = require(ReplicatedStorage.Shared.Palette)
-local Store = require(script.Parent.Store)
 local Theme = require(script.Parent.Theme)
 local World = require(script.Parent.World)
 local CreepFx = require(script.Parent.CreepFx)
+local Hud = require(script.Parent.Hud)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local notice = Remotes:WaitForChild("Notice") :: RemoteEvent
 local killFx = Remotes:WaitForChild("KillFx") :: RemoteEvent
-local revealFx = Remotes:WaitForChild("RevealFx") :: RemoteEvent
+local baseFx = Remotes:WaitForChild("BaseFx") :: RemoteEvent
 
 local Effects = {}
 local player = Players.LocalPlayer
 local SOUND_DING = "rbxasset://sounds/electronicpingshort.wav"
+local SOUND_KILL = "rbxasset://sounds/swordslash.wav"
+local SOUND_BOOM = "rbxasset://sounds/collide.wav"
 
 local gui: ScreenGui
 local toastList: Frame
@@ -43,6 +45,7 @@ function Effects.toast(text: string, color: Color3?, seconds: number?)
 	Theme.text("Text", item, text, 20, {
 		Size = UDim2.fromScale(1, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
+		Font = Theme.Display,
 		TextColor3 = color or Theme.Color.Text,
 	})
 	task.delay(seconds or 3.5, function()
@@ -66,17 +69,16 @@ local function banner(title: string, subtitle: string, color: Color3)
 		ZIndex = 6,
 	})
 	local t = Theme.text("Title", holder, title, 54, {
-		Font = Theme.Display,
 		Size = UDim2.new(1, 0, 0, 64),
-		TextColor3 = Theme.Color.Text,
+		Font = Theme.Display,
 		TextStrokeTransparency = 0.3,
 		TextStrokeColor3 = color,
 		ZIndex = 6,
 	})
 	local s = Theme.text("Subtitle", holder, subtitle, 24, {
-		Font = Theme.Display,
 		Size = UDim2.new(1, 0, 0, 30),
 		Position = UDim2.fromOffset(0, 66),
+		Font = Theme.Display,
 		TextColor3 = color,
 		TextStrokeTransparency = 0.5,
 		ZIndex = 6,
@@ -90,269 +92,143 @@ local function banner(title: string, subtitle: string, color: Color3)
 	end)
 end
 
--- Полёт Сферы ----------------------------------------------------------------
+-- Крупная надпись над Монолитом базы (видят все рядом).
+local function monolithText(baseIndex: number?, text: string, color: Color3, size: number)
+	local pos = World.monolith(baseIndex)
+	if not pos then
+		return
+	end
+	local anchor = Instance.new("Part")
+	anchor.Anchored = true
+	anchor.CanCollide = false
+	anchor.CanQuery = false
+	anchor.Transparency = 1
+	anchor.Size = Vector3.one * 0.1
+	anchor.Position = pos + Vector3.new(0, 12, 0)
+	anchor.Parent = Workspace
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.fromOffset(360, 80)
+	bb.AlwaysOnTop = true
+	bb.LightInfluence = 0
+	bb.MaxDistance = 220
+	bb.Adornee = anchor
+	local label = Theme.text("Text", bb, text, size, {
+		Size = UDim2.fromScale(1, 1),
+		Font = Theme.Display,
+		TextColor3 = color,
+		TextStrokeTransparency = 0,
+		TextStrokeColor3 = Color3.fromRGB(20, 20, 40),
+	})
+	local scale = Instance.new("UIScale")
+	scale.Scale = 0.3
+	scale.Parent = label
+	bb.Parent = anchor
+	TweenService:Create(scale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	TweenService:Create(anchor, TweenInfo.new(1.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = anchor.Position + Vector3.new(0, 5, 0) }):Play()
+	task.delay(1.3, function()
+		TweenService:Create(label, TweenInfo.new(0.5), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+	end)
+	task.delay(1.9, function()
+		anchor:Destroy()
+	end)
+end
 
-local function flySphere(from: Vector3, zone: number, baseIndex: number?)
-	local base = World.base(baseIndex)
-	local target = if base then base:GetPivot().Position + Vector3.new(0, 6, 0) else from + Vector3.new(0, 40, 0)
-	local model = Models.sphere(zone, CFrame.new(from + Vector3.new(0, 2, 0)))
-	local shell = model.PrimaryPart :: BasePart
-	for _, p in model:GetDescendants() do
+-- Луч энергии от постамента к Монолиту и вспышка Монолита.
+local function beam(baseIndex: number?, slot: number?)
+	local mono = World.monolith(baseIndex)
+	if not mono then
+		return
+	end
+	local from = mono + Vector3.new(8, 0, 0)
+	if slot then
+		local ped = World.pedestal(baseIndex, slot)
+		if ped then
+			from = ped.Position + Vector3.new(0, 3, 0)
+		end
+	end
+	local to = mono + Vector3.new(0, 7, 0)
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.Material = Enum.Material.Neon
+	p.Color = Color3.fromRGB(140, 230, 255)
+	p.Size = Vector3.new(0.6, 0.6, (to - from).Magnitude)
+	p.CFrame = CFrame.lookAt((from + to) / 2, to)
+	p.Parent = Workspace
+	TweenService:Create(p, TweenInfo.new(0.7), { Transparency = 1, Size = Vector3.new(0.1, 0.1, p.Size.Z) }):Play()
+	local flash = Instance.new("Part")
+	flash.Anchored = true
+	flash.CanCollide = false
+	flash.CanQuery = false
+	flash.Shape = Enum.PartType.Ball
+	flash.Material = Enum.Material.Neon
+	flash.Color = Color3.fromRGB(180, 240, 255)
+	flash.Transparency = 0.2
+	flash.Size = Vector3.one * 3
+	flash.Position = to
+	flash.Parent = Workspace
+	TweenService:Create(flash, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = Vector3.one * 14, Transparency = 1 }):Play()
+	CreepFx.burst(to, { Color3.fromRGB(150, 230, 255), Color3.new(1, 1, 1) }, 30, 0.6, 18)
+	task.delay(0.8, function()
+		p:Destroy()
+		flash:Destroy()
+	end)
+end
+
+-- Река осколков от игрока в Монолит.
+local function river(amount: number, baseIndex: number?)
+	local root = World.root()
+	local mono = World.monolith(baseIndex)
+	if not root or not mono then
+		return
+	end
+	local count = math.clamp(math.floor(math.log10(amount + 1) * 10), 6, 40)
+	task.spawn(function()
+		for i = 1, count do
+			local from = root.Position + Vector3.new(math.random() - 0.5, 1, math.random() - 0.5)
+			CreepFx.chips(from, mono + Vector3.new(0, 6, 0), 1, Theme.Color.Shards, 0.6)
+			if i % 4 == 0 then
+				CreepFx.playSound(SOUND_DING, 0.15, 1 + i / count, nil)
+			end
+			task.wait(0.03)
+		end
+	end)
+end
+
+-- Сфера звенит над крипом и улетает в иконку на экране.
+local function sphereToIcon(from: Vector3, zone: number)
+	local camera = Workspace.CurrentCamera
+	local m = Models.sphere(zone, CFrame.new(from + Vector3.new(0, 2, 0)))
+	for _, p in m:GetDescendants() do
 		if p:IsA("BasePart") then
-			p.Anchored = true
 			p.CanCollide = false
 			p.CanQuery = false
 		end
 	end
-	local a0 = Instance.new("Attachment")
-	a0.Position = Vector3.new(0, 0.8, 0)
-	a0.Parent = shell
-	local a1 = Instance.new("Attachment")
-	a1.Position = Vector3.new(0, -0.8, 0)
-	a1.Parent = shell
-	local trail = Instance.new("Trail")
-	trail.Attachment0, trail.Attachment1 = a0, a1
-	trail.Color = ColorSequence.new((Palette.Zones[zone] or Palette.Zones[1]).glow)
-	trail.LightEmission = 1
-	trail.Lifetime = 0.5
-	trail.Parent = shell
-	model.Parent = Workspace
-
-	local up = from + Vector3.new(0, 5, 0)
-	local function move(to: Vector3, seconds: number, style: Enum.EasingStyle)
-		local value = Instance.new("CFrameValue")
-		value.Value = model:GetPivot()
-		value.Changed:Connect(function(cf)
-			model:PivotTo(cf)
-		end)
-		local tw = TweenService:Create(value, TweenInfo.new(seconds, style, Enum.EasingDirection.InOut), { Value = CFrame.new(to) })
-		tw:Play()
-		tw.Completed:Wait()
-		value:Destroy()
-	end
-	task.spawn(function()
-		move(up, 0.35, Enum.EasingStyle.Quad)
-		CreepFx.playSound(SOUND_DING, 0.5, 1.2, shell)
-		task.wait(0.65) -- зависает над крипом
-		local dist = (target - up).Magnitude
-		move(target, math.clamp(dist / 120, 0.5, 2), Enum.EasingStyle.Sine)
-		model:Destroy()
-	end)
-end
-
--- Вскрытие ---------------------------------------------------------------------
-
-local function sphereAt(baseIndex: number, nestIndex: number): Model?
-	local base = World.base(baseIndex)
-	local nest = World.nest(baseIndex, nestIndex)
-	if not base or not nest then
-		return nil
-	end
-	local best, bestD = nil, 6
-	for _, m in base:GetChildren() do
-		if m:IsA("Model") and m.Name == "Sphere" then
-			local d = (m:GetPivot().Position - nest.Position).Magnitude
-			if d < bestD then
-				best, bestD = m, d
-			end
-		end
-	end
-	return best
-end
-
--- Свет сквозь трещины перебирает цвета редкости и задерживается на редких.
-local function tease(core: BasePart, hits: number, need: number)
-	if hits < Config.Spheres.TeaseFromHit then
-		return
-	end
-	local roll = math.random()
-	local rarity = if roll < 0.35 then 1 elseif roll < 0.6 then 2 elseif roll < 0.8 then 3 elseif roll < 0.93 then 4 else 5
-	core.Color = Palette.Rarity[rarity]
-	core.Transparency = 0.2
-	local light = core:FindFirstChildOfClass("PointLight")
-	if light then
-		light.Color = core.Color
-		light.Brightness = 0.6 + rarity * 0.5 + hits / need
-	end
-	if rarity >= 4 then
-		CreepFx.playSound(SOUND_DING, 0.3, 0.8 + rarity * 0.1, core)
-	end
-end
-
-local function addCrack(model: Model, hits: number, need: number)
-	local shell = model:FindFirstChild("Shell")
-	local core = model:FindFirstChild("Core")
-	if not shell or not shell:IsA("BasePart") or not core or not core:IsA("BasePart") then
-		return
-	end
-	local angle = math.rad(hits * 47)
-	local crack = Instance.new("Part")
-	crack.Name = "CrackFx"
-	crack.Anchored = true
-	crack.CanCollide = false
-	crack.CanQuery = false
-	crack.Material = Enum.Material.Neon
-	local warm = Color3.fromRGB(255, 190, 80)
-	crack.Color = if hits < Config.Spheres.TeaseFromHit then warm else core.Color
-	crack.Size = Vector3.new(0.16, 1.3 + hits / need, 0.16)
-	crack.CFrame = shell.CFrame * CFrame.Angles(0, angle, math.rad(hits * 23)) * CFrame.new(0, 0, -1.45)
-	crack.Parent = model
-	-- Толчок от удара.
-	local base = shell.CFrame
-	shell.CFrame = base * CFrame.new((math.random() - 0.5) * 0.3, 0, (math.random() - 0.5) * 0.3)
-	task.delay(0.06, function()
-		if shell.Parent then
-			shell.CFrame = base
-		end
-	end)
-	tease(core, hits, need)
-	for _, c in model:GetChildren() do
-		if c.Name == "CrackFx" and c:IsA("BasePart") and hits >= Config.Spheres.TeaseFromHit then
-			c.Color = core.Color
-		end
-	end
-end
-
-local function showWeapon(baseIndex: number, nestIndex: number, weapon: Formulas.Weapon)
-	local nest = World.nest(baseIndex, nestIndex)
-	if not nest then
-		return
-	end
-	local handle = Models.weaponHandle(weapon.zone, weapon.rarity, weapon.mutation)
-	local parts: { BasePart } = { handle }
-	for _, d in handle:GetDescendants() do
-		if d:IsA("BasePart") then
-			table.insert(parts, d)
-		end
-	end
-	local holder = Instance.new("Model")
-	holder.Name = "RevealedWeapon"
-	handle.Parent = holder
-	for _, p in parts do
-		p.Anchored = false
-		p.CanCollide = false
-	end
-	handle.Anchored = true
-	local start = nest.Position + Vector3.new(0, 2.5, 0)
-	handle.CFrame = CFrame.new(start)
-	holder.Parent = Workspace
-
-	local bb = Instance.new("BillboardGui")
-	bb.Size = UDim2.fromOffset(260, 60)
-	bb.StudsOffset = Vector3.new(0, 4, 0)
-	bb.AlwaysOnTop = true
-	bb.LightInfluence = 0
-	local color = if weapon.mutation > 0 then Palette.Mutation[weapon.mutation] else Palette.Rarity[weapon.rarity]
-	Theme.text("Name", bb, Formulas.weaponName(weapon), 28, {
-		Size = UDim2.fromScale(1, 0.6),
-		TextColor3 = color,
-		TextStrokeTransparency = 0.2,
-	})
-	Theme.text("Rarity", bb, Config.Rarities[weapon.rarity].name .. " · урон " .. Formulas.short(Formulas.weaponDamage(weapon)), 18, {
-		Size = UDim2.fromScale(1, 0.4),
-		Position = UDim2.fromScale(0, 0.6),
-		TextColor3 = Palette.Rarity[weapon.rarity],
-		TextStrokeTransparency = 0.3,
-	})
-	bb.Parent = handle
-
-	CreepFx.chips(start, nil, 10, color, 0.8)
-	CreepFx.playSound(SOUND_DING, 0.7, 0.9, handle)
+	m.Parent = Workspace
+	CreepFx.playSound(SOUND_DING, 0.6, 1.2, nil)
 	task.spawn(function()
 		local t0 = os.clock()
-		while os.clock() - t0 < 3 and handle.Parent do
-			local t = os.clock() - t0
-			handle.CFrame = CFrame.new(start + Vector3.new(0, math.min(t * 3, 3), 0)) * CFrame.Angles(0, t * 3, 0)
+		local start = from + Vector3.new(0, 2, 0)
+		while os.clock() - t0 < 1.1 and camera do
+			local k = (os.clock() - t0) / 1.1
+			local p: Vector3
+			if k < 0.45 then
+				p = start + Vector3.new(0, k / 0.45 * 3, 0) -- взлёт и зависание
+			else
+				-- Летим к иконке: точка на луче камеры через позицию иконки на экране.
+				local icon = Hud.spheresIconPosition() or Vector2.new(60, 300)
+				local ray = camera:ViewportPointToRay(icon.X, icon.Y + 36)
+				local target = ray.Origin + ray.Direction * 6
+				local f = (k - 0.45) / 0.55
+				p = (start + Vector3.new(0, 3, 0)):Lerp(target, f * f)
+			end
+			m:PivotTo(CFrame.new(p) * CFrame.Angles(0, os.clock() * 4, 0))
 			task.wait()
 		end
-		holder:Destroy()
+		m:Destroy()
 	end)
-end
-
--- Сфера раскалывается на две половинки, внутри — друза кристаллов цвета выпавшего.
-local function splitSphere(baseIndex: number, nestIndex: number, weapon: Formulas.Weapon)
-	local nest = World.nest(baseIndex, nestIndex)
-	if not nest then
-		return
-	end
-	local center = nest.Position + Vector3.new(0, 2.4, 0)
-	local inner = if weapon.mutation > 0 then Palette.Mutation[weapon.mutation] else Palette.Rarity[weapon.rarity]
-	local stone = Color3.fromRGB(196, 140, 92)
-	local parts: { BasePart } = {}
-	for side = -1, 1, 2 do
-		local half = Instance.new("Part")
-		half.Name = "SphereHalf"
-		half.Anchored = true
-		half.CanCollide = false
-		half.CanQuery = false
-		half.Material = Enum.Material.Sandstone
-		half.Color = stone
-		half.Size = Vector3.new(1.5, 3, 3)
-		half.CFrame = CFrame.new(center + Vector3.new(side * 0.75, 0, 0))
-		local mesh = Instance.new("SpecialMesh")
-		mesh.MeshType = Enum.MeshType.Sphere
-		mesh.Parent = half
-		half.Parent = Workspace
-		-- Внутренняя «друза»: светящийся срез.
-		local cut = Instance.new("Part")
-		cut.Anchored = true
-		cut.CanCollide = false
-		cut.CanQuery = false
-		cut.Material = Enum.Material.Neon
-		cut.Color = inner
-		cut.Size = Vector3.new(0.2, 2.4, 2.4)
-		cut.CFrame = half.CFrame * CFrame.new(-side * 0.7, 0, 0)
-		local cutMesh = Instance.new("SpecialMesh")
-		cutMesh.MeshType = Enum.MeshType.Sphere
-		cutMesh.Parent = cut
-		cut.Parent = Workspace
-		table.insert(parts, half)
-		table.insert(parts, cut)
-		local out = CFrame.new(center + Vector3.new(side * 2.4, -0.8, 0)) * CFrame.Angles(0, 0, math.rad(side * 35))
-		TweenService:Create(half, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { CFrame = out }):Play()
-		TweenService:Create(cut, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-			CFrame = out * CFrame.new(-side * 0.7, 0, 0),
-		}):Play()
-	end
-	CreepFx.burst(center, { inner, Color3.new(1, 1, 1) }, 40, 0.7, 20)
-	task.delay(3, function()
-		for _, p in parts do
-			TweenService:Create(p, TweenInfo.new(0.6), { Transparency = 1 }):Play()
-		end
-		task.wait(0.7)
-		for _, p in parts do
-			p:Destroy()
-		end
-	end)
-end
-
-local function onReveal(kind: string, baseIndex: number, nestIndex: number, data: any)
-	local mine = data.owner == player.UserId or (kind == "crack" and baseIndex == Store.data.baseIndex)
-	if kind == "start" then
-		if mine then
-			Store.reveals[nestIndex] = { hits = 0, need = data.need }
-			Store.emit("reveals")
-		end
-	elseif kind == "crack" then
-		if mine and Store.reveals[nestIndex] then
-			Store.reveals[nestIndex].hits = data.hits
-			Store.emit("reveals")
-		end
-		local model = sphereAt(baseIndex, nestIndex)
-		if model then
-			addCrack(model, data.hits, data.need)
-		end
-	elseif kind == "done" then
-		if mine then
-			Store.reveals[nestIndex] = nil
-			Store.emit("reveals")
-			local w = data.weapon :: Formulas.Weapon
-			local r = Config.Rarities[w.rarity]
-			Effects.toast(`Выпало: {Formulas.weaponName(w)} · {r.name}`, if w.mutation > 0 then Palette.Mutation[w.mutation] else Palette.Rarity[w.rarity], 4)
-		end
-		splitSphere(baseIndex, nestIndex, data.weapon)
-		showWeapon(baseIndex, nestIndex, data.weapon)
-	end
 end
 
 -- Сообщения сервера ------------------------------------------------------------
@@ -364,12 +240,38 @@ local function onNotice(kind: string, arg: any)
 			banner(`Зона {arg}`, zone.name, (Palette.Zones[arg] or Palette.Zones[1]).glow)
 		end
 	elseif kind == "zoneOpen" then
-		local zone = Config.Zones[arg]
-		Effects.toast(`Зона «{zone.name}» открыта: потолок Кольца и Ауры вырос`, Theme.Color.Good, 5)
-	elseif kind == "storageFull" then
-		Effects.toast("Склад полон — Сфера ждёт на земле у базы", Theme.Color.Bad)
+		Effects.toast(`Зона «{Config.Zones[arg].name}» открыта: потолок Кольца и Ауры вырос`, Theme.Color.Good, 5)
+	elseif kind == "spheresFull" then
+		Effects.toast(`Сфер {Config.Spheres.MaxStored}/{Config.Spheres.MaxStored} — открой их!`, Theme.Color.Bad)
+	elseif kind == "weaponsFull" then
+		Effects.toast("Инвентарь оружия полон — скорми обычные", Theme.Color.Bad)
+	elseif kind == "fed" then
+		Effects.toast(`Монолит получил {Formulas.short(arg)} осколков силы`, Color3.fromRGB(150, 220, 255))
+	elseif kind == "newPedestal" then
+		Effects.toast(`Новый ярус Монолита: постаментов теперь {arg}!`, Theme.Color.Crit, 5)
+	elseif kind == "insertAtBase" then
+		Effects.toast(`{arg} сильнее — вставь на базе!`, Theme.Color.Good, 4)
 	elseif kind == "announce" then
 		Effects.toast(tostring(arg), Palette.Mutation[4], 6)
+	end
+end
+
+local function onBaseFx(kind: string, baseIndex: number?, data: any)
+	local mine = data.owner == player.UserId
+	if kind == "insert" then
+		beam(baseIndex, nil)
+		monolithText(baseIndex, `Урон +{data.percent}%`, Theme.Color.Crit, 54)
+		if mine then
+			CreepFx.playSound(SOUND_DING, 0.9, 0.8, nil)
+		end
+	elseif kind == "level" then
+		monolithText(baseIndex, if data.gained > 1 then `Ур. {data.level}!  (+{data.gained})` else `Ур. {data.level}!`, Color3.fromRGB(170, 230, 255), 44)
+		beam(baseIndex, nil)
+		if mine then
+			CreepFx.playSound(SOUND_DING, 0.8, 1.3, nil)
+		end
+	elseif kind == "pour" and mine then
+		river(data.amount, baseIndex)
 	end
 end
 
@@ -380,23 +282,35 @@ function Effects.start()
 	gui.IgnoreGuiInset = true
 	gui.DisplayOrder = 5
 	gui.ScreenInsets = Enum.ScreenInsets.CoreUISafeInsets
+	-- Сообщения — слева под Сферами, чтобы не закрывать центр и экран вскрытия.
 	toastList = Theme.frame("Toasts", gui, {
-		Size = UDim2.new(0, 340, 0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 120),
-		AnchorPoint = Vector2.new(0.5, 0),
+		Size = UDim2.new(0, 300, 0.4, 0),
+		Position = UDim2.new(0, 10, 0.38, 150),
+		AnchorPoint = Vector2.new(0, 0),
 		BackgroundTransparency = 1,
 	})
 	local layout = Instance.new("UIListLayout")
 	layout.Padding = UDim.new(0, 6)
-	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
 	layout.Parent = toastList
 	gui.Parent = player:WaitForChild("PlayerGui")
 
 	notice.OnClientEvent:Connect(onNotice)
-	revealFx.OnClientEvent:Connect(onReveal)
+	baseFx.OnClientEvent:Connect(onBaseFx)
 	killFx.OnClientEvent:Connect(function(info: any)
+		if info.killer ~= player.UserId then
+			return
+		end
+		-- Серия: звук убийства с каждым шагом выше.
+		Hud.setStreak(info.streak, info.streakMult)
+		CreepFx.playSound(SOUND_KILL, 0.35, 0.9 + info.streak * 0.04, nil)
+		task.delay(Config.Juice.MagnetTime, Hud.bounceShards)
+		if info.mutation > 0 then
+			CreepFx.playSound(SOUND_BOOM, 1, 0.7, nil)
+			CreepFx.playSound(SOUND_DING, 0.9, 0.6 + info.mutation * 0.1, nil)
+		end
 		if info.sphere then
-			flySphere(info.pos, info.zone, info.base)
+			sphereToIcon(info.pos, info.zone)
 		end
 	end)
 end

@@ -31,6 +31,7 @@ export type Creep = {
 	offset: Vector3, -- место малого внутри стайки
 	fleeUntil: number,
 	fleeDir: Vector3,
+	knockUntil: number,
 	target: Vector3?,
 	nextWander: number,
 	sentHp: number,
@@ -168,6 +169,7 @@ local function spawnOne(zone: number, size: number, at: Vector3, flock: Flock?):
 		offset = Vector3.new(rng:NextNumber(-1, 1), 0, rng:NextNumber(-1, 1)) * C.FlockSpread,
 		fleeUntil = 0,
 		fleeDir = Vector3.zero,
+		knockUntil = 0,
 		target = nil,
 		nextWander = now() + rng:NextNumber(0, C.WanderEveryMax),
 		sentHp = maxHp,
@@ -297,6 +299,14 @@ function Creeps.damage(creep: Creep, amount: number, attackerPos: Vector3): bool
 	creep.model:SetAttribute("Hp", creep.hp)
 	creep.sentHp = creep.hp
 
+	-- Отброс от удара: короткий толчок прочь от игрока.
+	local push = (creep.root.Position - attackerPos) * Vector3.new(1, 0, 1)
+	if push.Magnitude > 0.1 then
+		local v = push.Unit * C.Sizes[creep.size].knockback
+		creep.velocity.PlaneVelocity = Vector2.new(v.X, v.Z)
+		creep.knockUntil = now() + C.KnockbackTime
+	end
+
 	-- Малые разбегаются всей стайкой.
 	local flock = creep.flock
 	if creep.size == 1 and flock then
@@ -336,6 +346,9 @@ local function tickCreep(c: Creep, t: number, dt: number)
 		end
 	end
 
+	if t < c.knockUntil then
+		return -- летит от удара
+	end
 	local s = C.Sizes[c.size]
 	local pos = c.root.Position
 	local inside = clampToZone(c.zone, pos)

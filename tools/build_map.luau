@@ -8,9 +8,8 @@
 -- Теги для скриптов:
 --   RiftPoint (Zone) — точки, откуда появляются крипы
 --   Gate (Zone) — портал на входе в зону
---   Base (Index) — база; внутри SpawnPoint, Sign, Overflow
---   Nest (Base, Index) — гнездо для Сферы
---   Station (Base) — станция Ауры и Кольца
+--   Base (Index) — база; внутри SpawnPoint, Sign, Monolith
+--   Pedestal (Base, Index) — постамент для оружия; внутри деталь Top
 --   Glow — светящиеся детали, которые клиент мягко «дышит»
 local CollectionService = game:GetService("CollectionService")
 local Lighting = game:GetService("Lighting")
@@ -615,79 +614,35 @@ for index = 1, count do
 	local mono = crystal(base, top + Vector3.new(0, 1.6, 0), 13, Color3.fromRGB(160, 215, 255), Vector3.zero)
 	mono.Name = "Monolith"
 
-	-- Три гнезда вокруг Монолита: каменная чаша с зубцами.
-	for k = 1, 3 do
-		local nestCf = frame * CFrame.Angles(0, math.rad((k - 2) * 60 + 180), 0) * CFrame.new(0, 0, -11)
-		local nest = block(base, {
-			Name = "Nest" .. k,
-			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(1, 6, 6),
-			CFrame = nestCf * CFrame.new(0, 0.5, 0) * CFrame.Angles(0, 0, math.rad(90)),
-			Color = Color3.fromRGB(120, 116, 124),
+	-- Кольцо постаментов вокруг Монолита: 10 мест, работают первые 3 + 1 за ярус.
+	for k = 1, Config.Monolith.MaxPedestals do
+		local a = math.rad((k - 1) * 360 / Config.Monolith.MaxPedestals + 18)
+		local pcf = frame * CFrame.Angles(0, a, 0) * CFrame.new(0, 0, -10)
+		local ped = block(base, {
+			Name = "Pedestal" .. k,
+			Size = Vector3.new(2.2, 2.6, 2.2),
+			CFrame = pcf * CFrame.new(0, 1.3, 0) * CFrame.Angles(0, math.rad(45), 0),
+			Color = Color3.fromRGB(130, 126, 150),
 			Material = Enum.Material.Slate,
+			Transparency = if k <= Config.Monolith.BasePedestals then 0 else 0.7,
 		})
-		deco(base, {
-			Name = "NestGlow",
-			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(0.12, 4.2, 4.2),
-			CFrame = nestCf * CFrame.new(0, 1.04, 0) * CFrame.Angles(0, 0, math.rad(90)),
-			Color = Palette.Zones[1].glow,
+		deco(ped, {
+			Name = "Top",
+			Size = Vector3.new(1.9, 0.3, 1.9),
+			CFrame = pcf * CFrame.new(0, 2.75, 0) * CFrame.Angles(0, math.rad(45), 0),
+			Color = Color3.fromRGB(110, 140, 170),
 			Material = Enum.Material.Neon,
-			Transparency = 0.4,
+			Transparency = if k <= Config.Monolith.BasePedestals then 0.2 else 0.85,
 		})
-		for p = 1, 5 do
-			local pa = math.rad(p * 72)
-			block(base, {
-				Name = "NestProng",
-				Size = Vector3.new(0.8, 2.4, 0.8),
-				CFrame = nestCf * CFrame.Angles(0, pa, 0) * CFrame.new(0, 1.6, -2.6) * CFrame.Angles(math.rad(-18), 0, 0),
-				Color = Color3.fromRGB(120, 116, 124),
-				Material = Enum.Material.Slate,
-			})
-		end
-		nest:SetAttribute("Base", index)
-		nest:SetAttribute("Index", k)
-		CollectionService:AddTag(nest, "Nest")
+		ped:SetAttribute("Base", index)
+		ped:SetAttribute("Index", k)
+		CollectionService:AddTag(ped, "Pedestal")
 	end
-
-	-- Станция Ауры и Кольца — справа от входа.
-	local stationCf = frame * CFrame.Angles(0, math.rad(-65), 0) * CFrame.new(0, 0, -16)
-	local station = Instance.new("Model")
-	station.Name = "Station"
-	local pedestal = block(station, {
-		Name = "Pedestal",
-		Size = Vector3.new(9, 1, 5),
-		CFrame = stationCf * CFrame.new(0, 0.5, 0),
-		Color = Color3.fromRGB(120, 116, 124),
-		Material = Enum.Material.Slate,
-	})
-	crystal(station, (stationCf * CFrame.new(-2.6, 1, 0)).Position, 6, Color3.fromRGB(90, 200, 255), Vector3.zero)
-	crystal(station, (stationCf * CFrame.new(2.6, 1, 0)).Position, 6, Color3.fromRGB(255, 200, 80), Vector3.zero)
-	local sign = deco(station, {
-		Name = "StationSign",
-		Size = Vector3.new(8, 2, 0.3),
-		CFrame = stationCf * CFrame.new(0, 8.2, 0) * CFrame.Angles(0, math.rad(180), 0),
-		Transparency = 1,
-	})
-	label(sign, "Аура · Кольцо", Color3.new(1, 1, 1), Enum.NormalId.Front)
-	label(sign, "Аура · Кольцо", Color3.new(1, 1, 1), Enum.NormalId.Back)
-	station.PrimaryPart = pedestal
-	station:SetAttribute("Base", index)
-	CollectionService:AddTag(station, "Station")
-	station.Parent = base
 
 	block(base, {
 		Name = "SpawnPoint",
 		Size = Vector3.new(2, 1, 2),
 		CFrame = frame * CFrame.new(0, 3, -17),
-		Transparency = 1,
-		CanCollide = false,
-		CanQuery = false,
-	})
-	block(base, {
-		Name = "Overflow",
-		Size = Vector3.new(2, 1, 2),
-		CFrame = frame * CFrame.Angles(0, math.rad(65), 0) * CFrame.new(0, 0.5, -16),
 		Transparency = 1,
 		CanCollide = false,
 		CanQuery = false,

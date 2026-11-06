@@ -11,12 +11,14 @@ export type Data = {
 	ring: number,
 	aura: number,
 	openZones: number,
-	storage: { Sphere },
-	overflow: number,
+	spheres: { Sphere },
 	pity: number,
-	freeOpen: boolean,
+	opened: number,
 	weapons: { Formulas.Weapon },
-	equipped: string,
+	pedestals: { string },
+	hand: string,
+	monolithLevel: number,
+	monolithProgress: number,
 	baseIndex: number?,
 }
 
@@ -27,17 +29,16 @@ Store.data = {
 	ring = 0,
 	aura = 0,
 	openZones = 1,
-	storage = {},
-	overflow = 0,
+	spheres = {},
 	pity = 0,
-	freeOpen = true,
+	opened = 0,
 	weapons = { { id = "starter", zone = 1, rarity = 1, mutation = 0 } },
-	equipped = "starter",
+	pedestals = { "starter", "", "" },
+	hand = "starter",
+	monolithLevel = 0,
+	monolithProgress = 0,
 	baseIndex = nil,
 } :: Data
-
--- Идущие вскрытия в гнёздах своей базы: [гнездо] = { hits, need }.
-Store.reveals = {} :: { [number]: { hits: number, need: number } }
 
 local listeners: { (section: string) -> () } = {}
 
@@ -51,19 +52,66 @@ function Store.emit(section: string)
 	end
 end
 
-function Store.equippedWeapon(): Formulas.Weapon
+function Store.weapon(id: string): Formulas.Weapon?
 	for _, w in Store.data.weapons do
-		if w.id == Store.data.equipped then
+		if w.id == id then
 			return w
 		end
 	end
-	return Store.data.weapons[1]
+	return nil
+end
+
+function Store.handWeapon(): Formulas.Weapon
+	return Store.weapon(Store.data.hand) or Store.data.weapons[1]
+end
+
+function Store.inPedestal(id: string): boolean
+	return table.find(Store.data.pedestals, id) ~= nil
+end
+
+-- Сумма урона оружия в постаментах.
+function Store.arsenal(): number
+	local sum = 0
+	for _, id in Store.data.pedestals do
+		local w = if id ~= "" then Store.weapon(id) else nil
+		if w then
+			sum += Formulas.weaponDamage(w)
+		end
+	end
+	return sum
+end
+
+-- Урон самого слабого в постаментах; 0, если есть пустой.
+function Store.weakest(): number
+	local weakest = math.huge
+	for _, id in Store.data.pedestals do
+		local w = if id ~= "" then Store.weapon(id) else nil
+		if not w then
+			return 0
+		end
+		weakest = math.min(weakest, Formulas.weaponDamage(w))
+	end
+	return if weakest == math.huge then 0 else weakest
+end
+
+-- Есть ли вне постаментов оружие сильнее самого слабого вставленного (повод бежать на базу).
+function Store.betterWaiting(): boolean
+	local weakest = Store.weakest()
+	for _, w in Store.data.weapons do
+		if not Store.inPedestal(w.id) and Formulas.weaponDamage(w) > weakest then
+			return true
+		end
+	end
+	return false
+end
+
+function Store.hitDamage(): number
+	return Formulas.hitDamage(Store.arsenal(), Store.data.monolithLevel, 0)
 end
 
 -- Урон в секунду игрока (для замка «до пробоя»).
 function Store.dps(): number
-	local w = Store.equippedWeapon()
-	return Formulas.dps(Formulas.weaponDamage(w) * Formulas.damageBonus(0), Formulas.hitsPerSecond(Store.data.ring))
+	return Formulas.dps(Store.hitDamage(), Formulas.hitsPerSecond(Store.data.ring))
 end
 
 function Store.start()
