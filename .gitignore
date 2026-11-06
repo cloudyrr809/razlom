@@ -1,0 +1,7 @@
+# Плейс и lock-файлы Studio
+/*.rbxlx
+/*.rbxl.lock
+/*.rbxlx.lock
+sourcemap.json
+/tools/globalTypes.d.luau
+roblox.yml

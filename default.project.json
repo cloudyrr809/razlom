@@ -1,0 +1,43 @@
+{
+  "name": "Razlom",
+  "servePort": 34873,
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      },
+      "Remotes": {
+        "$className": "Folder",
+        "Hit": { "$className": "RemoteEvent" },
+        "BuyUpgrade": { "$className": "RemoteEvent" },
+        "OpenSphere": { "$className": "RemoteEvent" },
+        "RevealHit": { "$className": "RemoteEvent" },
+        "Equip": { "$className": "RemoteEvent" },
+        "State": { "$className": "RemoteEvent" },
+        "HitFx": { "$className": "UnreliableRemoteEvent" },
+        "KillFx": { "$className": "RemoteEvent" },
+        "RevealFx": { "$className": "RemoteEvent" },
+        "Notice": { "$className": "RemoteEvent" }
+      }
+    },
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      },
+      "MapTools": {
+        "$className": "Folder",
+        "BuildMap": {
+          "$path": "tools/build_map.luau"
+        }
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "Client": {
+          "$path": "src/client"
+        }
+      }
+    }
+  }
+}
