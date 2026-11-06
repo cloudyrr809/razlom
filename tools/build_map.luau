@@ -6,8 +6,7 @@
 -- Размеры зон, дороги и баз берёт из ReplicatedStorage.Shared.Config.
 --
 -- Теги для скриптов:
---   RiftPoint (Zone) — точки, откуда появляются крипы
---   Gate (Zone) — портал на входе в зону
+--   CreepCamp (Zone) — центр лагеря крипов в нише; −Z смотрит (примерно) на тропу
 --   Base (Index) — база; внутри SpawnPoint, Sign, Monolith
 --   Pedestal (Base, Index) — постамент для оружия; внутри деталь Top
 --   Glow — светящиеся детали, которые клиент мягко «дышит»
@@ -227,209 +226,395 @@ local function torch(parent, pos)
 	m.Parent = parent
 end
 
--- Портал-кольцо из каменных блоков, нижняя часть уходит в землю. Сквозь него пробегают.
-local function portal(parent, center, radius, color, name)
-	local m = Instance.new("Model")
-	m.Name = name
-	local n = 34
-	for i = 0, n - 1 do
-		local a = i / n * math.pi * 2
-		local p = center + Vector3.new(0, math.sin(a) * radius, math.cos(a) * radius)
-		if p.Y > -2 then
-			block(m, {
-				Name = "Stone",
-				Size = Vector3.new(4.5, 3.8, radius * 2 * math.pi / n + 0.6),
-				CFrame = CFrame.new(p) * CFrame.Angles(-a, 0, 0),
-				Color = Color3.fromRGB(122, 126, 140),
-				Material = Enum.Material.Slate,
-			})
-			if i % 3 == 0 then
-				glow(deco(m, {
-					Name = "Rune",
-					Size = Vector3.new(4.7, 1.2, 1.2),
-					CFrame = CFrame.new(p) * CFrame.Angles(-a, 0, 0) * CFrame.Angles(0, 0, math.rad(45)),
-					Color = color,
-					Material = Enum.Material.Neon,
-				}))
-			end
-		end
-	end
-	-- Светящаяся завеса внутри кольца.
-	local veil = glow(deco(m, {
-		Name = "Veil",
-		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(0.4, radius * 2 - 3, radius * 2 - 3),
-		CFrame = CFrame.new(center),
-		Color = color,
-		Material = Enum.Material.Neon,
-		Transparency = 0.82,
-	}))
-	local emitter = Instance.new("ParticleEmitter")
-	emitter.Color = ColorSequence.new(color)
-	emitter.LightEmission = 1
-	emitter.Size = NumberSequence.new(0.6, 0)
-	emitter.Transparency = NumberSequence.new(0.2, 1)
-	emitter.Lifetime = NumberRange.new(1.5, 2.5)
-	emitter.Speed = NumberRange.new(1, 3)
-	emitter.SpreadAngle = Vector2.new(180, 180)
-	emitter.Rate = 30
-	emitter.Parent = veil
-	-- Парящие кристаллы вокруг.
-	for i = 1, 6 do
-		local a = i / 6 * math.pi * 2
-		crystal(m, center + Vector3.new(rng:NextNumber(-2, 2), math.sin(a) * (radius + 4), math.cos(a) * (radius + 4)), 3, color, Vector3.new(a, 0, 0.4))
-	end
-	m.Parent = parent
-	return m
-end
-
 -- Рельеф ------------------------------------------------------------------
+-- Тропа идёт по дну долины (в зоне 2 — каньона), лагеря — карманы-ниши в её склонах.
+-- Высота считается по точке: чем дальше от тропы, ниш и баз, тем выше склон.
 terrain:SetMaterialColor(Enum.Material.Sand, Palette.Zones[1].sand)
 terrain:SetMaterialColor(Enum.Material.Sandstone, Palette.Zones[2].sand)
+terrain:SetMaterialColor(Enum.Material.Limestone, Palette.Zones[2].sandDark)
 terrain:SetMaterialColor(Enum.Material.Rock, Color3.fromRGB(150, 140, 128))
-terrain:SetMaterialColor(Enum.Material.Ground, Color3.fromRGB(176, 120, 84))
+terrain:SetMaterialColor(Enum.Material.Ground, Color3.fromRGB(176, 128, 90))
+terrain:SetMaterialColor(Enum.Material.Mud, Color3.fromRGB(128, 74, 52))
 
 local MIN_X, MAX_X, MAX_Z = -170, Config.Zones[#Config.Zones].xEnd + 40, 175
 local zone2x = Config.Zones[2].xStart
--- Видимая поверхность рельефа встаёт примерно на 2 стада выше верха заливки.
-terrain:FillBlock(CFrame.new((MIN_X + zone2x) / 2, -6, 0), Vector3.new(zone2x - MIN_X, 8, MAX_Z * 2), Enum.Material.Sand)
-terrain:FillBlock(CFrame.new((zone2x + MAX_X) / 2, -6, 0), Vector3.new(MAX_X - zone2x, 8, MAX_Z * 2), Enum.Material.Sandstone)
-task.wait()
+local roadEnd = Config.Zones[#Config.Zones].xEnd
 
--- Дюны в зоне 1 и за базами, скалы в зоне 2 — только за краями дороги.
-for _ = 1, 70 do
-	local x = rng:NextNumber(MIN_X, MAX_X)
-	local z = rng:NextNumber(-MAX_Z, MAX_Z)
-	local nearRoad = x > G.X - 10 and math.abs(z) < HALF + 14
-	local nearBases = (Vector3.new(x, 0, z) - G).Magnitude < W.BaseRingRadius + W.BaseRadius + 14 and x < G.X + 10
-	if not nearRoad and not nearBases then
-		local r = rng:NextNumber(10, 26)
-		local mat = if x > zone2x then Enum.Material.Sandstone else Enum.Material.Sand
-		terrain:FillBall(Vector3.new(x, -r * 0.55, z), r, mat)
+-- Тропа. Та же формула, что Formulas.pathZ (модуль тут не подключить: клон без родителя).
+local function pathZ(x)
+	local t, z = x - G.X, 0
+	for _, w in W.PathWaves do
+		z += w.amp * math.sin(t / w.length * math.pi * 2)
+	end
+	return z
+end
+local function halfWidth(x)
+	return HALF * (1 + W.PathWidthJitter * math.noise(x / W.PathWidthScale, 3.7, 1.3))
+end
+-- Рамка тропы в точке X: LookVector — вдоль тропы, RightVector — вбок.
+local function pathFrame(x)
+	return CFrame.lookAt(Vector3.new(x, 0, pathZ(x)), Vector3.new(x + 1, 0, pathZ(x + 1)))
+end
+-- Расстояние до края тропы (≤ 0 — на тропе). Поперёк, а не по Z: на крутых изгибах это важно.
+local function pathEdge(x, z)
+	if x < G.X - 4 or x > roadEnd + 6 then
+		return math.huge
+	end
+	local slope = pathZ(x + 0.5) - pathZ(x - 0.5)
+	local edgeNoise = math.noise(x / 9, z / 9, 5.1) * 2.5
+	return math.abs(z - pathZ(x)) / math.sqrt(1 + slope * slope) - halfWidth(x) - edgeNoise
+end
+
+local function smooth(a, b, t)
+	local k = math.clamp((t - a) / (b - a), 0, 1)
+	return k * k * (3 - 2 * k)
+end
+local function fbm(x, z, scale, octaves, seed)
+	local sum, amp, f = 0, 1, 1 / scale
+	for i = 1, octaves do
+		sum += amp * math.noise(x * f, z * f, seed + i * 17.31)
+		amp *= 0.5
+		f *= 2
+	end
+	return sum
+end
+
+-- Лагеря: заранее, чтобы рельеф вырезал под них ниши.
+local NC = Config.Camps
+local campList = {}
+for zi, zone in Config.Zones do
+	local len = zone.xEnd - zone.xStart
+	for i = 1, NC.PerZone do
+		local cx = zone.xStart + (i - 0.5) * len / NC.PerZone + rng:NextNumber(-3, 3)
+		local side = if i % 2 == 1 then 1 else -1
+		local frame = pathFrame(cx)
+		local radius = NC.NicheRadius + rng:NextNumber(-NC.NicheRadiusJitter, NC.NicheRadiusJitter)
+		local depth = halfWidth(cx) + NC.NicheDepth + rng:NextNumber(-1.5, 1.5)
+		local center = frame.Position + frame.RightVector * side * depth
+		local turn = CFrame.Angles(0, math.rad(rng:NextNumber(-NC.NicheTurn, NC.NicheTurn)), 0)
+		table.insert(campList, {
+			zone = zi,
+			index = i,
+			center = center,
+			radius = radius,
+			cf = CFrame.lookAt(center, frame.Position) * turn, -- −Z смотрит на тропу
+		})
 	end
 end
-task.wait()
-
--- Дорога ------------------------------------------------------------------
-local road = folder(map, "Road")
-for zi, zone in Config.Zones do
-	local colors = Palette.Zones[zi]
-	local len = zone.xEnd - zone.xStart
-	local cx = (zone.xStart + zone.xEnd) / 2
-	block(road, {
-		Name = "Road" .. zi,
-		Size = Vector3.new(len, 2, HALF * 2 + 6),
-		Position = Vector3.new(cx, W.GroundY - 1, 0),
-		Color = colors.sand:Lerp(Color3.new(1, 1, 1), 0.08),
-		Material = if zi == 1 then Enum.Material.Sand else Enum.Material.Ground,
-	})
-	-- Протоптанная тропа посередине.
-	block(road, {
-		Name = "Path",
-		Size = Vector3.new(len, 0.1, 14),
-		Position = Vector3.new(cx, W.GroundY + 0.03, 0),
-		Color = colors.sandDark,
-		Material = Enum.Material.Sand,
-		CanCollide = false,
-	})
-
-	-- Низкие каменные стены по краям, в зоне 2 — ещё и высокие скалы-столбы.
-	for side = -1, 1, 2 do
-		local x = zone.xStart
-		while x < zone.xEnd do
-			local s = rng:NextNumber(3, 5)
-			rock(road, Vector3.new(x, 1.2, side * (HALF + 3 + rng:NextNumber(-0.5, 0.5))), Vector3.new(s, rng:NextNumber(2.5, 4), s), Color3.fromRGB(128, 126, 130))
-			x += s * 0.8
+local function campEdge(x, z)
+	local best = math.huge
+	for _, c in campList do
+		local d = math.sqrt((x - c.center.X) ^ 2 + (z - c.center.Z) ^ 2) - c.radius
+		if d < best then
+			best = d
 		end
-		if zi == 2 then
-			for _ = 1, 7 do
-				local px = rng:NextNumber(zone.xStart + 5, zone.xEnd - 5)
-				local pz = side * rng:NextNumber(HALF + 9, HALF + 28)
-				local h = rng:NextNumber(14, 30)
-				local base = rng:NextNumber(7, 12)
-				for k = 0, 2 do
-					rock(road, Vector3.new(px, h * (k + 0.5) / 3, pz), Vector3.new(base * (1 - k * 0.18), h / 3 + 1, base * (1 - k * 0.15)), colors.sandDark:Lerp(colors.sand, k * 0.3), Enum.Material.Sandstone)
+	end
+	return best
+end
+
+-- Плоская площадка баз и арены: круг вокруг входа, только по эту сторону от него.
+local function basesEdge(x, z)
+	local disc = math.sqrt((x - G.X) ^ 2 + z * z) - (W.BaseRingRadius + W.BaseRadius + 14)
+	return math.max(disc, x - (G.X + 8))
+end
+
+-- Высота и материал поверхности в точке.
+local function ground(x, z)
+	local dPath, dCamp, dBase = pathEdge(x, z), campEdge(x, z), basesEdge(x, z)
+	local d = math.min(dPath, dCamp, dBase)
+	local zone2 = smooth(zone2x - 12, zone2x + 12, x + math.noise(z / 30, 2.2, 0) * 14)
+	local onPath = dPath <= 0 or dCamp <= 0
+
+	-- Склоны долины: в зоне 1 — пологие дюны, в зоне 2 — крутые стены каньона.
+	local bank1 = 7 + 6 * fbm(x, z, 45, 3, 1)
+	local bank2 = 15 + 9 * fbm(x, z, 38, 4, 2)
+	local ramp1, ramp2 = 14, 9
+	-- У ниш склон круче — карман виден сразу.
+	-- Только рядом с нишей и там, где ниша ближе тропы.
+	local nicheSteep = smooth(12, 3, dCamp) * smooth(-1, 3, dPath - dCamp)
+	local ramp = (ramp1 + (ramp2 - ramp1) * zone2) * (1 - 0.6 * nicheSteep)
+	local bank = bank1 + (bank2 - bank1) * zone2
+	local h = bank * smooth(0, ramp, d)
+	-- Вдали — крупные дюны и выходы скал.
+	local far = smooth(15, 70, d)
+	h += far * (9 * fbm(x, z, 95, 3, 3) + 4)
+	local outcrop = math.max(0, fbm(x, z, 40, 2, 4) - 0.42) * 40 * far
+	h += outcrop
+	-- Край карты поднимается: долину замыкают холмы.
+	h += 28 * smooth(MAX_Z - 55, MAX_Z, math.abs(z)) + 28 * smooth(MIN_X + 50, MIN_X, x) + 34 * smooth(MAX_X - 45, MAX_X, x)
+	-- Мелкая рябь, кроме площадок.
+	h += math.noise(x / 7, z / 7, 9.9) * 0.8 * smooth(0, 4, d)
+	h = math.clamp(h, 0, 60)
+
+	local mat
+	if onPath then
+		mat = if zone2 > 0.5 then Enum.Material.Mud else Enum.Material.Ground
+	elseif dBase <= 0 then
+		mat = Enum.Material.Sand
+	elseif zone2 > 0.5 then
+		mat = "strata"
+	elseif outcrop > 3 or (nicheSteep > 0.4 and d > 1.5) then
+		mat = Enum.Material.Rock
+	else
+		mat = Enum.Material.Sand
+	end
+	return h, mat
+end
+
+-- Пишем вокселями (4 стада) кусками вдоль X, чтобы Studio не зависал.
+do
+	local VOX = 4
+	local Y0, Y1 = -12, 64
+	local x0, x1 = math.floor(MIN_X / VOX) * VOX, math.ceil(MAX_X / VOX) * VOX
+	local z0, z1 = -math.ceil(MAX_Z / VOX) * VOX, math.ceil(MAX_Z / VOX) * VOX
+	local ny, nz = (Y1 - Y0) / VOX, (z1 - z0) / VOX
+	local CHUNK = 8
+	local cx = x0
+	while cx < x1 do
+		local nx = math.min(CHUNK, (x1 - cx) / VOX)
+		local mats, occs = {}, {}
+		for ix = 1, nx do
+			mats[ix], occs[ix] = {}, {}
+			for iy = 1, ny do
+				mats[ix][iy], occs[ix][iy] = {}, {}
+			end
+			local x = cx + (ix - 0.5) * VOX
+			for iz = 1, nz do
+				local z = z0 + (iz - 0.5) * VOX
+				local h, mat = ground(x, z)
+				for iy = 1, ny do
+					local y = Y0 + (iy - 1) * VOX
+					-- Видимая поверхность встаёт на полвокселя выше заполненного — сдвигаем вниз.
+					local occ = math.clamp((h - y) / VOX - 0.5, 0, 1)
+					local m = mat
+					if m == "strata" then
+						-- Слоистые стены каньона.
+						m = if math.floor((y + math.noise(x / 20, z / 20) * 3) / 6) % 2 == 0 then Enum.Material.Sandstone else Enum.Material.Limestone
+					end
+					mats[ix][iy][iz] = if occ > 0 then m else Enum.Material.Air
+					occs[ix][iy][iz] = occ
 				end
 			end
 		end
+		local region = Region3.new(Vector3.new(cx, Y0, z0), Vector3.new(cx + nx * VOX, Y1, z1))
+		terrain:WriteVoxels(region, VOX, mats, occs)
+		cx += nx * VOX
+		task.wait()
+	end
+end
 
-		-- Разлом вдоль края и точки появления крипов.
-		local px = zone.xStart + 8
-		while px < zone.xEnd - 4 do
-			local z = side * (HALF - 1.5)
-			local hole = deco(road, {
-				Name = "RiftPoint",
-				Shape = Enum.PartType.Cylinder,
-				Size = Vector3.new(0.15, 2.2, 2.2),
-				CFrame = CFrame.new(px, W.GroundY + 0.08, z) * CFrame.Angles(0, 0, math.rad(90)),
-				Color = colors.glow,
-				Material = Enum.Material.Neon,
-				Transparency = 0.45,
-			})
-			hole:SetAttribute("Zone", zi)
-			CollectionService:AddTag(hole, "RiftPoint")
-			local emitter = Instance.new("ParticleEmitter")
-			emitter.Color = ColorSequence.new(colors.glow)
-			emitter.LightEmission = 1
-			emitter.Size = NumberSequence.new(0.4, 0)
-			emitter.Transparency = NumberSequence.new(0.3, 1)
-			emitter.Lifetime = NumberRange.new(1, 2)
-			emitter.Speed = NumberRange.new(2, 4)
-			emitter.SpreadAngle = Vector2.new(15, 15)
-			emitter.EmissionDirection = Enum.NormalId.Right
-			emitter.Rate = 4
-			emitter.Parent = hole
-			crack(road, Vector3.new(px, W.GroundY + 0.06, z), Vector3.new(rng:NextNumber(-1, 1), 0, -side * 0.6), rng:NextNumber(4, 9), 0.28, colors.glow, 1)
-			px += 15
+-- Высота поверхности в точке (для расстановки деталей).
+local function groundY(x, z)
+	return (ground(x, z))
+end
+
+-- Мелочь для пейзажа ----------------------------------------------------------
+-- Валун, утопленный в землю.
+local function boulder(parent, x, z, s, color, material)
+	return rock(parent, Vector3.new(x, groundY(x, z) + s * 0.25, z), Vector3.new(s * rng:NextNumber(0.9, 1.4), s * rng:NextNumber(0.6, 1), s * rng:NextNumber(0.9, 1.3)), color, material)
+end
+
+-- Сухой куст: несколько жёлто-зелёных комков.
+local function shrub(parent, x, z, s)
+	local y = groundY(x, z)
+	for _ = 1, rng:NextInteger(2, 4) do
+		local b = rng:NextNumber(0.8, 1.5) * s
+		deco(parent, {
+			Name = "Shrub",
+			Shape = Enum.PartType.Ball,
+			Size = Vector3.one * b,
+			Position = Vector3.new(x + rng:NextNumber(-0.8, 0.8) * s, y + b * 0.3, z + rng:NextNumber(-0.8, 0.8) * s),
+			Color = Color3.fromRGB(150, 140, 80):Lerp(Color3.fromRGB(110, 120, 60), rng:NextNumber()),
+			Material = Enum.Material.Grass,
+		})
+	end
+end
+
+-- Сухое дерево: кривой ствол и пара голых веток.
+local function deadTree(parent, x, z, s)
+	local m = Instance.new("Model")
+	m.Name = "DeadTree"
+	local base = CFrame.new(x, groundY(x, z) - 0.5, z) * CFrame.Angles(math.rad(rng:NextNumber(-8, 8)), rng:NextNumber(0, 6.3), math.rad(rng:NextNumber(-8, 8)))
+	local wood = Color3.fromRGB(110, 86, 70)
+	local trunkH = 7 * s
+	block(m, { Name = "Trunk", Size = Vector3.new(0.9, trunkH, 0.9) * Vector3.new(s, 1, s), CFrame = base * CFrame.new(0, trunkH / 2, 0), Color = wood, Material = Enum.Material.Wood })
+	for i = 1, rng:NextInteger(2, 4) do
+		local len = rng:NextNumber(2.5, 4.5) * s
+		local at = base * CFrame.new(0, trunkH * rng:NextNumber(0.5, 0.95), 0) * CFrame.Angles(0, i * 2.1 + rng:NextNumber(-0.4, 0.4), 0) * CFrame.Angles(math.rad(rng:NextNumber(35, 60)), 0, 0)
+		deco(m, { Name = "Branch", Size = Vector3.new(0.4 * s, len, 0.4 * s), CFrame = at * CFrame.new(0, len / 2, 0), Color = wood, Material = Enum.Material.Wood })
+	end
+	m.Parent = parent
+end
+
+-- Тропа и лагеря --------------------------------------------------------------
+local road = folder(map, "Road")
+for zi, zone in Config.Zones do
+	local colors = Palette.Zones[zi]
+	local rockColor = if zi == 1 then Color3.fromRGB(128, 126, 130) else colors.sandDark
+	local rockMaterial = if zi == 1 then Enum.Material.Slate else Enum.Material.Sandstone
+
+	-- Камни и кусты вдоль краёв тропы.
+	local x = zone.xStart + rng:NextNumber(2, 6)
+	while x < zone.xEnd do
+		local side = if rng:NextNumber() < 0.5 then -1 else 1
+		local frame = pathFrame(x)
+		local p = frame.Position + frame.RightVector * side * (halfWidth(x) + rng:NextNumber(0, 5))
+		if campEdge(p.X, p.Z) > 3 then
+			if rng:NextNumber() < 0.6 then
+				for _ = 1, rng:NextInteger(1, 3) do
+					boulder(road, p.X + rng:NextNumber(-2, 2), p.Z + rng:NextNumber(-2, 2), rng:NextNumber(1.2, 3.5), rockColor, rockMaterial)
+				end
+			elseif zi == 1 then
+				shrub(road, p.X, p.Z, rng:NextNumber(0.8, 1.3))
+			end
+		end
+		x += rng:NextNumber(5, 11)
+	end
+
+	-- На склонах: сухие деревья, кусты, валуны, в зоне 1 — кристаллы.
+	for _ = 1, (if zi == 1 then 40 else 28) do
+		local px = rng:NextNumber(zone.xStart, zone.xEnd)
+		local side = if rng:NextNumber() < 0.5 then -1 else 1
+		local pz = pathZ(px) + side * rng:NextNumber(HALF + 6, HALF + 45)
+		if campEdge(px, pz) > 4 and pathEdge(px, pz) > 3 then
+			local roll = rng:NextNumber()
+			if zi == 1 and roll < 0.25 then
+				crystal(road, Vector3.new(px, groundY(px, pz) - 0.6, pz), rng:NextNumber(4, 9), colors.crystal, Vector3.new(rng:NextNumber(-0.3, 0.3), rng:NextNumber(0, 3), rng:NextNumber(-0.3, 0.3)))
+			elseif roll < 0.45 then
+				deadTree(road, px, pz, rng:NextNumber(0.8, 1.4))
+			elseif roll < 0.7 and zi == 1 then
+				shrub(road, px, pz, rng:NextNumber(0.9, 1.6))
+			else
+				boulder(road, px, pz, rng:NextNumber(2.5, 6), rockColor, rockMaterial)
+			end
 		end
 	end
 
-	-- Ветвистые трещины по дороге (зона 1 — голубые, зона 2 — лава).
-	for _ = 1, (if zi == 1 then 7 else 4) do
-		local p = Vector3.new(rng:NextNumber(zone.xStart + 6, zone.xEnd - 6), W.GroundY + 0.07, rng:NextNumber(-HALF + 4, HALF - 4))
+	-- Ветвистые трещины по тропе (зона 1 — голубые, зона 2 — лава).
+	for _ = 1, (if zi == 1 then 7 else 5) do
+		local px = rng:NextNumber(zone.xStart + 6, zone.xEnd - 6)
+		local p = Vector3.new(px, W.GroundY + 0.07, pathZ(px) + rng:NextNumber(-0.6, 0.6) * halfWidth(px))
 		crack(road, p, Vector3.new(rng:NextNumber(-1, 1), 0, rng:NextNumber(-1, 1)), rng:NextNumber(8, 14), 0.3, colors.glow, 2)
-	end
-	-- Кристаллы по обочинам зоны 1.
-	if zi == 1 then
-		for _ = 1, 12 do
-			local side = if rng:NextNumber() < 0.5 then -1 else 1
-			crystal(road, Vector3.new(rng:NextNumber(zone.xStart, zone.xEnd), 0, side * rng:NextNumber(HALF + 7, HALF + 18)), rng:NextNumber(4, 9), colors.crystal, Vector3.new(rng:NextNumber(-0.3, 0.3), rng:NextNumber(0, 3), rng:NextNumber(-0.3, 0.3)))
-		end
 	end
 	task.wait()
 end
 
--- Порталы: вход в зону 1 и врата между зонами ---------------------------------
-local gates = folder(map, "Gates")
-for zi = 1, #Config.Zones do
-	local x = Config.Zones[zi].xStart
-	local p = portal(gates, Vector3.new(x, 7, 0), HALF + 1, Palette.Zones[zi].glow, "Gate" .. zi)
-	p:SetAttribute("Zone", zi)
-	CollectionService:AddTag(p, "Gate")
-	local sign = deco(p, {
-		Name = "Sign",
-		Size = Vector3.new(0.3, 4, 24),
-		Position = Vector3.new(x - 1, HALF + 13, 0),
+-- Ниши: разлом в глубине, валуны у стен, факелы у входа, метка для сервера.
+local camps = folder(map, "Camps")
+for _, c in campList do
+	local colors = Palette.Zones[c.zone]
+	local rockColor = if c.zone == 1 then Color3.fromRGB(128, 126, 130) else colors.sandDark
+	local rockMaterial = if c.zone == 1 then Enum.Material.Slate else Enum.Material.Sandstone
+	local R = c.radius
+	local niche = Instance.new("Model")
+	niche.Name = `Camp{c.zone}_{c.index}`
+
+	-- Валуны у задней стены, разные, кучками.
+	for _ = 1, rng:NextInteger(4, 7) do
+		local a = rng:NextNumber(-2.1, 2.1) -- угол от задней точки ниши
+		local s = rng:NextNumber(1.5, 4.5)
+		local p = c.cf:PointToWorldSpace(Vector3.new(math.sin(a) * (R - s * 0.3), 0, math.cos(a) * (R - s * 0.3)))
+		boulder(niche, p.X, p.Z, s, rockColor, rockMaterial)
+	end
+	-- Разлом в глубине ниши — отсюда крипы и берутся.
+	local back = rng:NextNumber(-0.5, 0.5)
+	local riftPos = c.cf:PointToWorldSpace(Vector3.new(math.sin(back) * R * 0.72, W.GroundY + 0.08, math.cos(back) * R * 0.72))
+	local hole = deco(niche, {
+		Name = "Rift",
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(0.15, rng:NextNumber(2.4, 3.6), rng:NextNumber(2.4, 3.6)),
+		CFrame = CFrame.new(riftPos) * CFrame.Angles(0, 0, math.rad(90)),
+		Color = colors.glow,
+		Material = Enum.Material.Neon,
+		Transparency = 0.4,
+	})
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Color = ColorSequence.new(colors.glow)
+	emitter.LightEmission = 1
+	emitter.Size = NumberSequence.new(0.5, 0)
+	emitter.Transparency = NumberSequence.new(0.3, 1)
+	emitter.Lifetime = NumberRange.new(1, 2)
+	emitter.Speed = NumberRange.new(2, 4)
+	emitter.SpreadAngle = Vector2.new(15, 15)
+	emitter.EmissionDirection = Enum.NormalId.Right
+	emitter.Rate = 5
+	emitter.Parent = hole
+	for _ = 1, rng:NextInteger(2, 4) do
+		local dir = c.cf:VectorToWorldSpace(Vector3.new(rng:NextNumber(-1, 1), 0, -rng:NextNumber(0.3, 1)))
+		crack(niche, riftPos, dir, rng:NextNumber(5, 9), 0.3, colors.glow, 1)
+	end
+	-- Факелы у входа, не всегда оба.
+	for _, sgn in { -1, 1 } do
+		if rng:NextNumber() < 0.8 then
+			local a = sgn * rng:NextNumber(1.9, 2.3)
+			torch(niche, c.cf:PointToWorldSpace(Vector3.new(math.sin(a) * (R - 1.5), 0, math.cos(a) * (R - 1.5))))
+		end
+	end
+	-- Невидимая метка лагеря: сервер ставит крипов по Config.Camps.Slots от неё.
+	local marker = deco(niche, {
+		Name = "CampPoint",
+		Size = Vector3.new(1, 1, 1),
+		CFrame = c.cf + Vector3.new(0, W.GroundY + 0.5, 0),
 		Transparency = 1,
 	})
-	label(sign, `Зона {zi} · {Config.Zones[zi].name}`, Color3.new(1, 1, 1), Enum.NormalId.Left)
-	label(sign, `Зона {zi} · {Config.Zones[zi].name}`, Color3.new(1, 1, 1), Enum.NormalId.Right)
+	marker:SetAttribute("Zone", c.zone)
+	CollectionService:AddTag(marker, "CreepCamp")
+	niche.Parent = camps
+end
+task.wait()
+
+-- Указатели зон у начала каждой зоны, у края тропы ---------------------------------
+local signs = folder(map, "ZoneSigns")
+for zi = 1, #Config.Zones do
+	local x = Config.Zones[zi].xStart + 3
+	local frame = pathFrame(x)
+	local at = frame.Position - frame.RightVector * (halfWidth(x) + 1)
+	local cf = CFrame.lookAt(at, at + frame.LookVector)
+	local sign = Instance.new("Model")
+	sign.Name = "Zone" .. zi
+	for _, dx in { -5, 5 } do
+		block(sign, {
+			Name = "Post",
+			Size = Vector3.new(0.8, 9, 0.8),
+			CFrame = cf * CFrame.new(dx, 4.5, 0),
+			Color = Color3.fromRGB(90, 66, 50),
+			Material = Enum.Material.Wood,
+		})
+	end
+	local board = block(sign, {
+		Name = "Board",
+		Size = Vector3.new(12, 3.5, 0.5),
+		CFrame = cf * CFrame.new(0, 7, 0),
+		Color = Color3.fromRGB(70, 58, 52),
+		Material = Enum.Material.Wood,
+	})
+	glow(deco(sign, {
+		Name = "Trim",
+		Size = Vector3.new(12.4, 0.3, 0.6),
+		CFrame = cf * CFrame.new(0, 8.9, 0),
+		Color = Palette.Zones[zi].glow,
+		Material = Enum.Material.Neon,
+	}))
+	label(board, `Зона {zi} · {Config.Zones[zi].name}`, Color3.new(1, 1, 1), Enum.NormalId.Front)
+	label(board, `Зона {zi} · {Config.Zones[zi].name}`, Color3.new(1, 1, 1), Enum.NormalId.Back)
+	sign.Parent = signs
 end
 
 -- Закрытый разлом «Скоро» в конце.
 do
-	local x = Config.Zones[#Config.Zones].xEnd
+	local x = roadEnd
+	local z0 = pathZ(x)
 	local wall = Instance.new("Model")
 	wall.Name = "SoonRift"
 	for i = -5, 5 do
 		local s = rng:NextNumber(9, 14)
-		rock(wall, Vector3.new(x + 5, s * 0.6, i * 6), Vector3.new(s, s * rng:NextNumber(1.3, 2.4), s), Palette.Zones[2].sandDark, Enum.Material.Sandstone)
+		rock(wall, Vector3.new(x + 5, s * 0.6, z0 + i * 6), Vector3.new(s, s * rng:NextNumber(1.3, 2.4), s), Palette.Zones[2].sandDark, Enum.Material.Sandstone)
 	end
-	block(wall, { Name = "Blocker", Size = Vector3.new(2, 60, HALF * 2 + 30), Position = Vector3.new(x, 30, 0), Transparency = 1 })
+	block(wall, { Name = "Blocker", Size = Vector3.new(2, 60, HALF * 2 + 30), Position = Vector3.new(x, 30, z0), Transparency = 1 })
 	local closed = deco(wall, {
 		Name = "ClosedCrack",
 		Size = Vector3.new(0.5, 16, 10),
-		Position = Vector3.new(x - 1, 10, 0),
+		Position = Vector3.new(x - 1, 10, z0),
 		Color = Color3.fromRGB(90, 70, 130),
 		Material = Enum.Material.Neon,
 		Transparency = 0.3,

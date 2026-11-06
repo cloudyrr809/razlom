@@ -6,6 +6,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local ContentProvider = game:GetService("ContentProvider")
 local SoundService = game:GetService("SoundService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
@@ -41,6 +42,12 @@ type View = {
 	phase: number,
 	squashUntil: number,
 	mutation: number,
+	height: number,
+	basePivot: CFrame,
+	recoilStart: number,
+	recoilAxis: Vector3,
+	recoilAngle: number,
+	predictedAt: number,
 }
 local views: { [number]: View } = {}
 
@@ -48,17 +55,52 @@ local SOUND_HIT = "rbxasset://sounds/swordslash.wav"
 local SOUND_CRIT = "rbxasset://sounds/electronicpingshort.wav"
 local SQUASH_TIME = 0.16
 
-local function playSound(id: string, volume: number, pitch: number, at: BasePart?)
-	local s = Instance.new("Sound")
-	s.SoundId = id
+-- Пул готовых звуков: новый Sound сначала грузится и звучит с задержкой,
+-- а загруженный из пула играет в тот же кадр.
+local pools: { [string]: { list: { Sound }, next: number } } = {}
+-- Все звуки игры — в одной группе: общая громкость в одном месте.
+local sfx = Instance.new("SoundGroup")
+sfx.Name = "Sfx"
+sfx.Volume = Config.Juice.SfxVolume
+sfx.Parent = SoundService
+
+local function pool(id: string): { list: { Sound }, next: number }
+	local existing = pools[id]
+	if existing then
+		return existing
+	end
+	local list = {}
+	for i = 1, Config.Juice.SoundPool do
+		local s = Instance.new("Sound")
+		s.Name = "Pooled" .. i
+		s.SoundId = id
+		s.SoundGroup = sfx
+		s.Parent = SoundService
+		table.insert(list, s)
+	end
+	local created = { list = list, next = 1 }
+	pools[id] = created
+	task.spawn(function()
+		ContentProvider:PreloadAsync(list)
+	end)
+	return created
+end
+
+-- Загрузить звуки заранее, до первого удара.
+function CreepFx.preload(ids: { string })
+	for _, id in ids do
+		pool(id)
+	end
+end
+
+local function playSound(id: string, volume: number, pitch: number, _at: BasePart?)
+	local p = pool(id)
+	local s = p.list[p.next]
+	p.next = p.next % #p.list + 1
 	s.Volume = volume
 	s.PlaybackSpeed = pitch
-	s.RollOffMaxDistance = 80
-	s.Parent = at or SoundService
+	s.TimePosition = 0
 	s:Play()
-	task.delay(3, function()
-		s:Destroy()
-	end)
 end
 CreepFx.playSound = playSound
 
@@ -77,8 +119,22 @@ local function bind(model: Instance)
 	if not model:IsA("Model") then
 		return
 	end
-	local root = model.PrimaryPart or model:WaitForChild("Root", 5)
-	if not root or not root:IsA("BasePart") or not model.Parent then
+	-- Крипы стоят на месте и живут долго: дальние приходят по стримингу позже — ждём Root без срока.
+	local root = model:FindFirstChild("Root")
+	if not root then
+		local conn: RBXScriptConnection
+		conn = model.ChildAdded:Connect(function(child)
+			if child.Name == "Root" then
+				conn:Disconnect()
+				task.defer(bind, model)
+			end
+		end)
+		model.Destroying:Once(function()
+			conn:Disconnect()
+		end)
+		return
+	end
+	if not root:IsA("BasePart") or not model.Parent then
 		return
 	end
 	local id = num(model, "CreepId")
@@ -160,6 +216,12 @@ local function bind(model: Instance)
 		phase = math.random() * 10,
 		squashUntil = 0,
 		mutation = mutation,
+		height = s.height,
+		basePivot = model:GetPivot(),
+		recoilStart = -math.huge,
+		recoilAxis = Vector3.xAxis,
+		recoilAngle = math.rad(Config.Juice.RecoilAngle / math.sqrt(s.radius)),
+		predictedAt = -math.huge,
 	}
 
 	-- Звук и подсказка для Золотого и реже, если игрок в той же зоне.
@@ -170,8 +232,18 @@ local function bind(model: Instance)
 		end
 	end
 
-	model.Destroying:Once(function()
-		views[id] = nil
+	local view = views[id]
+	local function drop()
+		if views[id] == view then
+			views[id] = nil
+		end
+	end
+	model.Destroying:Once(drop)
+	-- Ушёл по стримингу — забываем; вернётся — ChildAdded папки привяжет заново.
+	root.AncestryChanged:Connect(function()
+		if not root:IsDescendantOf(Workspace) then
+			drop()
+		end
 	end)
 end
 
@@ -207,6 +279,18 @@ local function updateView(v: View, t: number)
 	end
 	if v.cap then
 		v.cap.Scale = Vector3.new(1 + squash * 0.5 - breathe * 0.5, 1 - squash * 0.7, 1 + squash * 0.5 - breathe * 0.5)
+	end
+	-- Отшатывается от удара, качнувшись от земли: крипы стоят на месте, сервер их не двигает.
+	if v.recoilStart > -math.huge then
+		local rk = (t - v.recoilStart) / Config.Juice.RecoilTime
+		if rk < 1 then
+			local ang = v.recoilAngle * math.sin(rk * math.pi) * (1 - rk) * 2
+			local foot = v.basePivot.Position - Vector3.new(0, v.height / 2, 0)
+			v.model:PivotTo(CFrame.new(foot) * CFrame.fromAxisAngle(v.recoilAxis, ang) * CFrame.new(-foot) * v.basePivot)
+		else
+			v.recoilStart = -math.huge
+			v.model:PivotTo(v.basePivot)
+		end
 	end
 	-- Трещины и глаза мерцают; Призматический переливается.
 	local pulse = 0.5 + math.sin(t * 3 + v.phase) * 0.5
@@ -350,14 +434,47 @@ local function hitStop()
 	end)
 end
 
+local function topOf(v: View): Vector3
+	return v.basePivot.Position + Vector3.new(0, v.height / 2 + 0.5, 0)
+end
+
+-- Сплющивание и отшатывание прочь от того, кто ударил.
+local function react(v: View, from: Vector3?)
+	local t = os.clock()
+	v.lastHit = t
+	v.squashUntil = t + Config.Juice.HitStop + SQUASH_TIME
+	local away = if from then (v.basePivot.Position - from) * Vector3.new(1, 0, 1) else Vector3.zero
+	if away.Magnitude < 0.1 then
+		away = v.basePivot.LookVector * -1
+	end
+	-- Ось наклона — вверх × «прочь»: верх крипа уходит от удара.
+	local u = away.Unit
+	v.recoilAxis = Vector3.new(u.Z, 0, -u.X)
+	v.recoilStart = t
+end
+
+-- Свой удар: крип реагирует сразу (звук, вспышка, отшатывание), урон придёт с сервера.
+function CreepFx.predictHit(creepId: number)
+	local v = views[creepId]
+	if not v then
+		return
+	end
+	local root = World.root()
+	react(v, root and root.Position)
+	v.predictedAt = os.clock()
+	hitStop()
+	flash(v.model, Color3.new(1, 1, 1))
+	playSound(SOUND_HIT, 0.25, 0.9 + math.random() * 0.25, v.root)
+	local zone = math.max(1, num(v.model, "Zone"))
+	burst(topOf(v) - Vector3.new(0, 1, 0), { Palette.Zones[zone].sand, Palette.Zones[zone].glow }, 5, 0.5, 14)
+end
+
 local function onHit(creepId: number, damage: number, crit: boolean, attacker: number)
 	local v = views[creepId]
 	if not v then
 		return
 	end
-	v.lastHit = os.clock()
-	v.squashUntil = os.clock() + Config.Juice.HitStop + SQUASH_TIME
-	local top = v.root.Position + Vector3.new(0, v.root.Size.Y / 2 + 0.5, 0)
+	local top = topOf(v)
 	local mine = attacker == player.UserId
 	local zone = math.max(1, num(v.model, "Zone"))
 	if crit then
@@ -365,13 +482,26 @@ local function onHit(creepId: number, damage: number, crit: boolean, attacker: n
 	else
 		floatText(top, Formulas.short(damage), if mine then Color3.fromRGB(255, 255, 255) else Theme.Color.TextDim, false)
 	end
+	-- Реакцию на свой удар уже показали сразу; если предсказания не было — показываем сейчас.
+	local predicted = mine and os.clock() - v.predictedAt < Config.Juice.PredictWindow
+	if not predicted then
+		local attackerPlayer = Players:GetPlayerByUserId(attacker)
+		local character = attackerPlayer and attackerPlayer.Character
+		local attackerRoot = character and character:FindFirstChild("HumanoidRootPart")
+		react(v, if attackerRoot and attackerRoot:IsA("BasePart") then attackerRoot.Position else nil)
+	end
 	if mine then
-		hitStop()
-		flash(v.model, if crit then Theme.Color.Crit else Color3.new(1, 1, 1))
-		playSound(if crit then SOUND_CRIT else SOUND_HIT, if crit then 0.5 else 0.22, if crit then 1.4 else 0.9 + math.random() * 0.25, v.root)
-		burst(top - Vector3.new(0, 1, 0), { Palette.Zones[zone].sand, Palette.Zones[zone].glow }, if crit then 14 else 5, 0.5, 14)
+		if not predicted then
+			hitStop()
+			playSound(SOUND_HIT, 0.25, 0.9 + math.random() * 0.25, v.root)
+		end
 		if crit then
+			flash(v.model, Theme.Color.Crit)
+			playSound(SOUND_CRIT, 0.5, 1.4, v.root)
+			burst(top - Vector3.new(0, 1, 0), { Palette.Zones[zone].sand, Palette.Zones[zone].glow }, 14, 0.5, 14)
 			shake(0.25, 0.15)
+		elseif not predicted then
+			flash(v.model, Color3.new(1, 1, 1))
 		end
 	end
 	if num(v.model, "Size") == 3 then
@@ -409,6 +539,7 @@ function CreepFx.start()
 	for _, m in folder:GetChildren() do
 		task.spawn(bind, m)
 	end
+	CreepFx.preload({ SOUND_HIT, SOUND_CRIT })
 	hitFx.OnClientEvent:Connect(onHit)
 	killFx.OnClientEvent:Connect(onKill)
 	RunService.RenderStepped:Connect(function()

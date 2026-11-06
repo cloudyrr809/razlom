@@ -67,12 +67,28 @@ function Models.creepLook(zone: number, mutation: number): CreepLook
 	return look
 end
 
--- Крип-«гриб»: круглое тело на коротких ножках, широкая шляпка с трещинами, светящиеся глаза.
--- Корень (Root) — невидимый блок, по нему считается физика и дистанция. Перёд — −Z корня.
+-- Крип-«гриб»: ножка с утолщением и юбочкой, корни по земле, шляпка с пластинками снизу,
+-- пятнами и светящимися трещинами, глаза под шляпкой. Каждый немного другой: пропорции,
+-- наклон шляпки, оттенок, число пятен. Крупного окружают маленькие грибы-ростки.
+-- Корень (Root) — невидимый блок, по нему считается дистанция и клик. Перёд — −Z корня.
+local function jitter(c: Color3, rng: Random, amount: number): Color3
+	local h, s, v = c:ToHSV()
+	return Color3.fromHSV((h + rng:NextNumber(-amount, amount) * 0.3) % 1, math.clamp(s + rng:NextNumber(-amount, amount), 0, 1), math.clamp(v + rng:NextNumber(-amount, amount), 0, 1))
+end
+
 function Models.creep(zone: number, size: number, mutation: number, cf: CFrame): Model
 	local s = Config.Creeps.Sizes[size]
 	local r, h = s.radius, s.height
 	local look = Models.creepLook(zone, mutation)
+	local rng = Random.new()
+	local V = Config.CreepLooks
+	if mutation == 0 then
+		look.body = jitter(look.body, rng, V.ColorJitter)
+		look.cap = jitter(look.cap, rng, V.ColorJitter)
+	end
+	local w = rng:NextNumber(1 - V.Proportion, 1 + V.Proportion) -- толщина
+	local tall = rng:NextNumber(1 - V.Proportion, 1 + V.Proportion) -- рост ножки
+	local capW = rng:NextNumber(1 - V.Proportion, 1 + V.Proportion)
 
 	local model = Instance.new("Model")
 	model.Name = "Creep"
@@ -89,49 +105,80 @@ function Models.creep(zone: number, size: number, mutation: number, cf: CFrame):
 	model.PrimaryPart = root
 	local bottom = cf * CFrame.new(0, -h / 2, 0)
 
-	local function add(p: BasePart)
+	local function add(p: BasePart): BasePart
 		p.Parent = model
 		weld(root, p)
+		return p
+	end
+	-- По видимым частям тоже можно кликнуть.
+	local function solid(p: BasePart): BasePart
+		p.CanQuery = true
+		return add(p)
 	end
 
-	-- Ножки.
-	for i = 0, 3 do
-		local a = math.rad(45 + i * 90)
-		add(blob("Foot", Vector3.new(r * 0.5, h * 0.18, r * 0.55), bottom * CFrame.new(math.cos(a) * r * 0.5, h * 0.08, math.sin(a) * r * 0.5), look.body, look.material))
+	-- Корни: вытянутые капли, расходятся от ножки по земле.
+	local roots = rng:NextInteger(3, 5)
+	for i = 1, roots do
+		local a = (i + rng:NextNumber(-0.3, 0.3)) / roots * math.pi * 2
+		local len = r * rng:NextNumber(0.7, 1.1)
+		add(blob("Foot", Vector3.new(r * 0.32 * w, h * 0.1, len), bottom * CFrame.Angles(0, a, 0) * CFrame.new(0, h * 0.04, -r * 0.55) * CFrame.Angles(math.rad(8), 0, 0), look.body:Lerp(Color3.new(0, 0, 0), 0.15), look.material))
 	end
-	-- Тело.
-	local bodyH = h * 0.55
-	add(blob("Body", Vector3.new(r * 1.7, bodyH, r * 1.65), bottom * CFrame.new(0, h * 0.1 + bodyH / 2, 0), look.body, look.material))
-	-- Глаза: две светящиеся щёлочки под шляпкой.
+	-- Ножка: широкое основание и сама ножка.
+	local bodyH = h * 0.5 * tall
+	-- Луковица внизу и узкая ножка, глубоко входящая в неё: без «снеговика» из шаров.
+	add(blob("Base", Vector3.new(r * 1.6 * w, h * 0.34, r * 1.55 * w), bottom * CFrame.new(0, h * 0.15, 0), look.body, look.material))
+	solid(blob("Body", Vector3.new(r * 1.15 * w, bodyH * 1.3, r * 1.1 * w), bottom * CFrame.new(0, h * 0.1 + bodyH * 0.5, 0), look.body, look.material))
+	-- Юбочка под шляпкой.
+	add(blob("Skirt", Vector3.new(r * 1.35 * w, h * 0.06, r * 1.35 * w), bottom * CFrame.new(0, h * 0.1 + bodyH * 0.86, 0), look.cap:Lerp(Color3.new(1, 1, 1), 0.25), look.material))
+	-- Глаза: две светящиеся щёлочки на ножке.
+	local eyeGap = r * rng:NextNumber(0.24, 0.36)
 	for side = -1, 1, 2 do
-		add(blob("Eye", Vector3.new(r * 0.3, r * 0.12, r * 0.1), bottom * CFrame.new(side * r * 0.3, h * 0.1 + bodyH * 0.78, -r * 0.8), look.glow, Enum.Material.Neon))
+		add(blob("Eye", Vector3.new(r * 0.3, r * 0.12, r * 0.1), bottom * CFrame.new(side * eyeGap, h * 0.1 + bodyH * 0.68, -r * 0.55 * w) * CFrame.Angles(0, 0, side * math.rad(rng:NextNumber(4, 14))), look.glow, Enum.Material.Neon))
 	end
-	-- Шляпка.
-	local capH = h * 0.5
-	local capY = h * 0.1 + bodyH + capH * 0.18
-	local cap = blob("Cap", Vector3.new(r * 2.2, capH, r * 2.2), bottom * CFrame.new(0, capY, 0), look.cap, look.material)
-	add(cap)
-	-- Трещины на шляпке: тонкие светящиеся полоски, лежащие на её поверхности.
-	local cracks = 3 + size
-	for i = 1, cracks do
-		local a = i / cracks * math.pi * 2 + size
-		local dist = r * (0.45 + 0.35 * ((i % 2) * 0.5 + 0.25))
-		-- Высота поверхности эллипсоида шляпки над её центром на этом расстоянии.
-		local k = math.clamp(dist / (r * 1.1), 0, 0.98)
+
+	-- Шляпка чуть наклонена в случайную сторону.
+	local capH = h * rng:NextNumber(0.42, 0.55)
+	local capR = r * 1.1 * capW
+	local capY = h * 0.1 + bodyH + capH * 0.12
+	local tilt = math.rad(rng:NextNumber(0, V.CapTilt))
+	local capCf = bottom * CFrame.new(0, capY, 0) * CFrame.Angles(0, rng:NextNumber(0, math.pi * 2), 0) * CFrame.Angles(tilt, 0, 0)
+	add(blob("Gills", Vector3.new(capR * 1.85, capH * 0.3, capR * 1.85), capCf * CFrame.new(0, -capH * 0.08, 0), look.cap:Lerp(look.body, 0.5):Lerp(Color3.new(0, 0, 0), 0.25), look.material))
+	local cap = solid(blob("Cap", Vector3.new(capR * 2, capH, capR * 2), capCf, look.cap, look.material))
+
+	-- Точка на поверхности шляпки: k — доля радиуса от центра, a — угол.
+	local function onCap(a: number, k: number, lift: number): CFrame
 		local y = capH / 2 * math.sqrt(1 - k * k)
-		local tilt = math.atan2(capH / 2 * k, r * 1.1 * math.sqrt(1 - k * k))
+		local slope = math.atan2(capH / 2 * k, capR * math.sqrt(1 - k * k))
+		return capCf * CFrame.Angles(0, -a, 0) * CFrame.new(capR * k, y + lift, 0) * CFrame.Angles(0, 0, -slope)
+	end
+	-- Пятна.
+	local spotColor = if mutation == 0 then look.cap:Lerp(Color3.new(1, 1, 1), 0.65) else look.glow:Lerp(Color3.new(1, 1, 1), 0.4)
+	for _ = 1, rng:NextInteger(V.SpotsMin, V.SpotsMax + size) do
+		local d = r * rng:NextNumber(0.16, 0.34)
+		add(blob("Spot", Vector3.new(d, 0.12 + r * 0.03, d * rng:NextNumber(0.8, 1.2)), onCap(rng:NextNumber(0, math.pi * 2), rng:NextNumber(0.05, 0.78), -0.02), spotColor, Enum.Material.SmoothPlastic))
+	end
+	-- Светящиеся трещины.
+	local cracks = 2 + size
+	for i = 1, cracks do
+		local a = (i + rng:NextNumber(-0.25, 0.25)) / cracks * math.pi * 2
 		add(part({
 			Name = "Crack",
-			Size = Vector3.new(r * 0.08 + 0.06, 0.08, r * 0.55),
-			CFrame = bottom
-				* CFrame.new(0, capY, 0)
-				* CFrame.Angles(0, -a, 0)
-				* CFrame.new(dist, y + 0.02, 0)
-				* CFrame.Angles(0, math.rad(70 + i * 17), 0)
-				* CFrame.Angles(tilt * 0.6, 0, 0),
+			Size = Vector3.new(r * 0.08 + 0.06, 0.08, r * rng:NextNumber(0.4, 0.65)),
+			CFrame = onCap(a, rng:NextNumber(0.35, 0.7), 0.02) * CFrame.Angles(0, math.rad(rng:NextNumber(50, 130)), 0),
 			Color = look.glow,
 			Material = Enum.Material.Neon,
 		}))
+	end
+
+	-- Ростки вокруг Крупного.
+	if size == 3 then
+		for _ = 1, rng:NextInteger(2, 4) do
+			local a = rng:NextNumber(0, math.pi * 2)
+			local sh = rng:NextNumber(0.9, 1.6)
+			local at = bottom * CFrame.Angles(0, a, 0) * CFrame.new(0, 0, -r * rng:NextNumber(0.9, 1.15)) * CFrame.Angles(math.rad(rng:NextNumber(-12, 12)), 0, math.rad(rng:NextNumber(-12, 12)))
+			add(blob("Sprout", Vector3.new(0.45, sh, 0.45), at * CFrame.new(0, sh / 2, 0), look.body, look.material))
+			add(blob("SproutCap", Vector3.new(sh * 0.9, sh * 0.45, sh * 0.9), at * CFrame.new(0, sh, 0), look.cap, look.material))
+		end
 	end
 
 	if mutation >= 1 then

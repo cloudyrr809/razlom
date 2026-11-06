@@ -5,13 +5,20 @@
 
 local Config = {}
 
--- Мир. Дорога идёт вдоль оси X, середина дороги — Z = 0, земля — Y = 0.
+-- Мир. Тропа идёт вдоль оси X и петляет: Z середины = сумма волн amp × sin(2π × (X − RoadStart.X) / length).
+-- Земля на тропе — Y = 0, по бокам рельеф поднимается.
 Config.World = {
-	RoadHalfWidth = 25, -- половина ширины дороги
+	RoadHalfWidth = 12, -- половина ширины тропы (средняя)
+	PathWaves = { -- крупный изгиб + две мелкие волны с некратными длинами, чтобы рисунок не повторялся
+		{ amp = 22, length = 150 },
+		{ amp = 7, length = 61 },
+		{ amp = 2.5, length = 37 },
+	},
+	PathWidthJitter = 0.5, -- ширина тропы гуляет: × (1 ± это × шум), шум обычно в пределах ±0.5
+	PathWidthScale = 40, -- длина «волны» шума ширины, стады
 	GroundY = 0, -- верх песка
-	CreepEdgeMargin = 3, -- насколько крипы держатся от края дороги
 	ZoneTrackInterval = 0.25, -- как часто сервер смотрит, кто в какой зоне, сек
-	ZoneSideSlack = 12, -- насколько за краем дороги игрок ещё считается «в зоне»
+	ZoneSideSlack = 22, -- насколько за краем тропы игрок ещё считается «в зоне» (лагеря в нишах)
 	-- Вход в зону 1 (портал). Все базы стоят на дуге вокруг него на одном расстоянии.
 	RoadStart = Vector3.new(30, 0, 0),
 	BaseRingRadius = 118, -- от входа до центра каждой базы
@@ -24,10 +31,12 @@ Config.World = {
 }
 
 -- Зоны. hpMult — множитель HP к зоне 1.
+-- sizeHpMult — множитель HP по размерам (Малый, Средний, Крупный):
+-- в первой зоне Крупные слабее, чтобы первая Сфера давалась быстро.
 -- shardBonus и sphereBonus — «пир» зоны 1: осколки ×3, шанс Сферы ×2.
 Config.Zones = {
-	{ name = "Светлые дюны", xStart = 30, xEnd = 180, hpMult = 1, shardBonus = 3, sphereBonus = 2 },
-	{ name = "Ржавый каньон", xStart = 180, xEnd = 330, hpMult = 70, shardBonus = 1, sphereBonus = 1 },
+	{ name = "Светлые дюны", xStart = 30, xEnd = 180, hpMult = 1, sizeHpMult = { 1, 1, 0.4 }, shardBonus = 3, sphereBonus = 2 },
+	{ name = "Ржавый каньон", xStart = 180, xEnd = 330, hpMult = 70, sizeHpMult = { 1, 1, 1 }, shardBonus = 1, sphereBonus = 1 },
 }
 -- Множители HP будущих зон (для расчётов и следующих обновлений): 1 / 70 / 2100 / 31500 / 504000.
 Config.FutureZoneHpMult = { 1, 70, 2100, 31500, 504000 }
@@ -37,21 +46,15 @@ Config.ZoneUnlock = {
 	KillsToOpen = 1,
 }
 
--- Крипы. HP = BaseHp × hpMult зоны × hpUnits.
+-- Крипы стоят на месте, в лагерях-нишах у тропы. HP = BaseHp × hpMult зоны × hpUnits.
 -- Осколки = reward × ShardGrowth^(зона − 1) × shardBonus зоны.
 Config.Creeps = {
 	BaseHp = 4,
 	ShardGrowth = 8,
 	RegenPerSecond = 0.04, -- доля максимального HP в секунду, идёт всегда
-	InCombatTime = 1.5, -- сколько секунд после удара крип считается «в бою» (для полоски)
-	TickInterval = 0.1, -- шаг серверного цикла крипов, сек
-	BasePerZone = 20, -- крипов в зоне всегда
-	PerPlayerInZone = 8, -- плюс за каждого игрока в зоне
-	RespawnMin = 3,
+	TickInterval = 0.1, -- шаг серверного цикла регена, сек
+	RespawnMin = 3, -- через сколько секунд убитый крип возрождается на своём месте в лагере
 	RespawnMax = 5,
-	SpawnPerSecond = 6, -- сколько новых крипов зона выпускает в секунду, пока не наберёт норму
-	FlockMin = 3,
-	FlockMax = 5,
 	Sizes = {
 		{
 			id = "Small",
@@ -59,13 +62,8 @@ Config.Creeps = {
 			hpUnits = 1,
 			reward = 1,
 			sphereChance = 0.02,
-			share = 0.5,
 			radius = 1.4, -- радиус для дистанции удара и размер модели, стады
 			height = 2.6,
-			speed = 7,
-			fleeSpeed = 14,
-			fleeTime = 2,
-			knockback = 16, -- скорость отброса от удара, стад/с
 		},
 		{
 			id = "Medium",
@@ -73,13 +71,8 @@ Config.Creeps = {
 			hpUnits = 3,
 			reward = 4,
 			sphereChance = 0.04,
-			share = 0.35,
 			radius = 2.4,
 			height = 4.2,
-			speed = 0,
-			fleeSpeed = 0,
-			fleeTime = 0,
-			knockback = 10,
 		},
 		{
 			id = "Large",
@@ -87,20 +80,37 @@ Config.Creeps = {
 			hpUnits = 8,
 			reward = 11,
 			sphereChance = 0.08,
-			share = 0.15,
 			radius = 4,
 			height = 7,
-			speed = 3,
-			fleeSpeed = 0,
-			fleeTime = 0,
-			knockback = 5,
 		},
 	},
-	KnockbackTime = 0.12, -- сколько длится отброс, сек
-	WanderEveryMin = 3, -- как часто бродячие крипы выбирают новую точку, сек
-	WanderEveryMax = 7,
-	WanderDistance = 18,
-	FlockSpread = 4, -- разброс малых вокруг центра стайки
+}
+
+-- Разброс внешности крипов (только вид, на бой не влияет).
+Config.CreepLooks = {
+	Proportion = 0.12, -- ± доля к толщине, росту ножки и ширине шляпки
+	ColorJitter = 0.05, -- ± к насыщенности и яркости (оттенок — втрое меньше)
+	CapTilt = 12, -- наклон шляпки до, градусы
+	SpotsMin = 3, -- пятен на шляпке; к максимуму ещё + номер размера
+	SpotsMax = 6,
+}
+
+-- Лагеря крипов: ниши по краям тропы, по очереди слева и справа.
+-- slots — кто стоит в лагере: size из Config.Creeps.Sizes, offset — от центра ниши
+-- (−Z смотрит на тропу, +X — вправо, если смотреть из ниши на тропу).
+Config.Camps = {
+	PerZone = 6,
+	NicheRadius = 10, -- средний радиус ниши; у каждой свой, ± NicheRadiusJitter
+	NicheRadiusJitter = 1.5,
+	NicheDepth = 9, -- насколько центр ниши дальше края тропы
+	NicheTurn = 18, -- ниша развёрнута к тропе не строго, а ± столько градусов
+	SlotJitter = 1, -- крип встаёт со сдвигом до стольких стад от своего места
+	SlotTurn = 35, -- и повёрнут на ± столько градусов
+	Slots = {
+		{ size = 1, offset = Vector3.new(-5, 0, -3) },
+		{ size = 1, offset = Vector3.new(5, 0, -3) },
+		{ size = 3, offset = Vector3.new(0, 0, 3) },
+	},
 }
 
 -- Мутации крипов. Проверяются от редкой к частой: первая сработавшая побеждает.
@@ -116,6 +126,8 @@ Config.CreepMutations = {
 -- Бой.
 Config.Combat = {
 	HitRadius = 10, -- от игрока до поверхности крипа, стады
+	TargetSlack = 3, -- запас к радиусу удара на сервере (сетевой рывок), стады
+	ClickQueueWindow = 0.15, -- клик раньше срока ждёт, только если до удара осталось меньше, сек
 	CritChance = 0.1,
 	CritMult = 3,
 	HitBurst = 2, -- сколько ударов можно «накопить» на случай сетевых рывков
@@ -191,8 +203,8 @@ Config.Upgrades = {
 		baseCost = 10,
 		costGrowth = 1.23,
 		capPerZone = 10,
-		start = 2.5, -- ударов в секунду на старте
-		perLevel = 0.15,
+		start = 1.6, -- ударов в секунду на старте
+		perLevel = 0.1,
 		lookEvery = 10, -- каждые 10 уровней новый вид
 	},
 	Aura = {
@@ -214,6 +226,11 @@ Config.Base = {
 Config.Juice = {
 	HitStop = 0.05, -- замирание на попадании, сек
 	MagnetTime = 0.75, -- за сколько осколки долетают до игрока
+	RecoilAngle = 18, -- наклон крипа от удара, градусы (делится на √радиуса: крупный качается меньше)
+	RecoilTime = 0.3, -- сколько длится отшатывание, сек
+	SfxVolume = 0.6, -- общая громкость звуков игры (группа Sfx)
+	SoundPool = 6, -- сколько копий каждого звука держим загруженными (столько могут звучать разом)
+	PredictWindow = 0.6, -- ответ сервера позже этого — реакцию на свой удар показываем заново
 }
 
 -- Отправка данных игроку.

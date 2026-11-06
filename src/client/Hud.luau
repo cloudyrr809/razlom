@@ -8,7 +8,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.Shared.Config)
@@ -17,7 +16,6 @@ local Palette = require(ReplicatedStorage.Shared.Palette)
 local Store = require(script.Parent.Store)
 local Theme = require(script.Parent.Theme)
 local World = require(script.Parent.World)
-local Input = require(script.Parent.Input)
 
 local Hud = {}
 local player = Players.LocalPlayer
@@ -136,17 +134,14 @@ function Hud.start()
 	gui.ResetOnSpawn = false
 	gui.ScreenInsets = Enum.ScreenInsets.CoreUISafeInsets
 
-	-- Сверху: осколки, серия, Монолит ------------------------------------------
+	-- Слева сверху: осколки, серия, Монолит. Центр экрана — для игры. ------------------
 	local top = Theme.frame("Top", gui, {
-		Size = UDim2.fromOffset(280, 110),
-		Position = UDim2.new(0.5, 0, 0, 4),
-		AnchorPoint = Vector2.new(0.5, 0),
+		Size = UDim2.fromOffset(250, 110),
+		Position = UDim2.fromOffset(8, 4),
 		BackgroundTransparency = 1,
 	})
 	local pill = Theme.frame("Shards", top, {
 		Size = UDim2.fromOffset(210, 46),
-		Position = UDim2.fromScale(0.5, 0),
-		AnchorPoint = Vector2.new(0.5, 0),
 		BackgroundTransparency = 0.08,
 	})
 	Theme.corner(pill, UDim.new(0.5, 0))
@@ -164,7 +159,8 @@ function Hud.start()
 
 	local streakText = Theme.text("Streak", top, "", 20, {
 		Size = UDim2.new(1, 0, 0, 22),
-		Position = UDim2.fromOffset(0, 48),
+		Position = UDim2.fromOffset(4, 48),
+		TextXAlignment = Enum.TextXAlignment.Left,
 		Font = Theme.Display,
 		TextColor3 = Theme.Color.Crit,
 		TextStrokeTransparency = 0.2,
@@ -174,9 +170,8 @@ function Hud.start()
 	streakScale.Parent = streakText
 
 	local barBack = Theme.frame("MonolithBar", top, {
-		Size = UDim2.fromOffset(240, 12),
-		Position = UDim2.new(0.5, 0, 0, 74),
-		AnchorPoint = Vector2.new(0.5, 0),
+		Size = UDim2.fromOffset(210, 12),
+		Position = UDim2.fromOffset(0, 74),
 		BackgroundColor3 = Color3.fromRGB(16, 14, 26),
 		BackgroundTransparency = 0.2,
 	})
@@ -192,9 +187,9 @@ function Hud.start()
 	fillGrad.Color = ColorSequence.new(Color3.fromRGB(80, 220, 255), Color3.fromRGB(190, 110, 255))
 	fillGrad.Parent = barFill
 	local monoText = Theme.text("Monolith", top, "", 14, {
-		Size = UDim2.new(1, 40, 0, 16),
-		Position = UDim2.new(0.5, 0, 0, 88),
-		AnchorPoint = Vector2.new(0.5, 0),
+		Size = UDim2.new(1, 0, 0, 16),
+		Position = UDim2.fromOffset(4, 88),
+		TextXAlignment = Enum.TextXAlignment.Left,
 		Font = Theme.Display,
 		TextColor3 = Theme.Color.TextDim,
 		TextStrokeTransparency = 0.5,
@@ -203,7 +198,7 @@ function Hud.start()
 	-- Слева: Сферы и урон арсенала ---------------------------------------------
 	local left = Theme.frame("Spheres", gui, {
 		Size = UDim2.fromOffset(150, 58),
-		Position = UDim2.new(0, 8, 0.38, 0),
+		Position = UDim2.new(0, 8, 0.3, 60), -- ниже блока осколков даже на низком экране
 		AnchorPoint = Vector2.new(0, 0.5),
 		BackgroundTransparency = 0.1,
 	})
@@ -231,7 +226,7 @@ function Hud.start()
 	})
 	local openButton = Theme.button("Open", gui, "Открыть", "primary", {
 		Size = UDim2.fromOffset(150, 40),
-		Position = UDim2.new(0, 8, 0.38, 36),
+		Position = UDim2.new(0, 8, 0.3, 96),
 		Font = Theme.Display,
 		TextSize = 20,
 	})
@@ -241,7 +236,7 @@ function Hud.start()
 	end)
 	local arsenalText = Theme.text("Arsenal", gui, "", 18, {
 		Size = UDim2.fromOffset(220, 22),
-		Position = UDim2.new(0, 12, 0.38, 82),
+		Position = UDim2.new(0, 12, 0.3, 142),
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Font = Theme.Display,
 		TextStrokeTransparency = 0.3,
@@ -275,8 +270,7 @@ function Hud.start()
 	-- Стрелка к Золотому и более редкому мутанту.
 	local pointer = Theme.frame("MutantPointer", gui, {
 		Size = UDim2.fromOffset(280, 30),
-		Position = UDim2.new(0.5, 0, 0, 116),
-		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromOffset(8, 116),
 		BackgroundTransparency = 1,
 		Visible = false,
 	})
@@ -292,25 +286,6 @@ function Hud.start()
 		TextStrokeTransparency = 0.3,
 	})
 
-	-- Большая кнопка «Удар» на телефоне, левее прыжка.
-	local attack = roundButton("Attack", gui, "⚔", "Удар", 104)
-	attack.AnchorPoint = Vector2.new(1, 1)
-	attack.Position = UDim2.new(1, -150, 1, -26)
-	attack.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-			Input.press("button")
-		end
-	end)
-	attack.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-			Input.release("button")
-		end
-	end)
-	local function refreshAttack()
-		attack.Visible = UserInputService.PreferredInput == Enum.PreferredInput.Touch
-	end
-	UserInputService:GetPropertyChangedSignal("PreferredInput"):Connect(refreshAttack)
-	refreshAttack()
 
 	-- Обновление по данным ----------------------------------------------------
 	local lastSpheres = 0

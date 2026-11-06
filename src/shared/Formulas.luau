@@ -21,7 +21,9 @@ end
 function Formulas.creepMaxHp(zone: number, size: number, mutation: number): number
 	local s = Config.Creeps.Sizes[size]
 	local m = Config.CreepMutations[mutation]
-	return Config.Creeps.BaseHp * zoneOf(zone).hpMult * s.hpUnits * (if m then m.hp else 1)
+	local z = zoneOf(zone)
+	local sizeMult = z.sizeHpMult[size] or 1
+	return Config.Creeps.BaseHp * z.hpMult * s.hpUnits * sizeMult * (if m then m.hp else 1)
 end
 
 function Formulas.creepShards(zone: number, size: number, mutation: number): number
@@ -168,9 +170,20 @@ end
 -- Мир -----------------------------------------------------------------------
 
 -- Номер зоны по позиции, 0 — не на дороге.
+-- Z середины тропы в точке X (сумма волн, на входе X = RoadStart.X — ровно 0).
+function Formulas.pathZ(x: number): number
+	local W = Config.World
+	local t = x - W.RoadStart.X
+	local z = 0
+	for _, w in W.PathWaves do
+		z += w.amp * math.sin(t / w.length * math.pi * 2)
+	end
+	return z
+end
+
 function Formulas.zoneAt(pos: Vector3): number
 	local W = Config.World
-	if math.abs(pos.Z) > W.RoadHalfWidth + W.ZoneSideSlack then
+	if math.abs(pos.Z - Formulas.pathZ(pos.X)) > W.RoadHalfWidth + W.ZoneSideSlack then
 		return 0
 	end
 	for i, z in Config.Zones do

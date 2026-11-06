@@ -36,6 +36,7 @@ Cosmetics.start()
 Guide.start()
 Ambient.start()
 
+Input.onCreepHit = CreepFx.predictHit
 Hud.on("inventory", InventoryWindow.toggle)
 Hud.on("upgrades", UpgradesWindow.toggle)
 Hud.on("open", RevealScreen.open)

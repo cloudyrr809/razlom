@@ -66,7 +66,9 @@ local function reward(session: PlayerState.Session, creep: Creeps.Creep, pos: Ve
 	})
 end
 
-local function onHit(player: Player)
+-- targetId — крип, по которому игрок кликнул (реакцию клиент уже показал).
+-- Сам сервер цель не выбирает: если крип мёртв или далеко — удара нет.
+local function onHit(player: Player, targetId: unknown)
 	local session = PlayerState.get(player)
 	if not session then
 		return
@@ -82,15 +84,15 @@ local function onHit(player: Player)
 		return
 	end
 	local pos = root.Position
-	local creep = Creeps.nearest(pos, Config.Combat.HitRadius)
-	if not creep then
+	local creep = if type(targetId) == "number" then Creeps.get(targetId) else nil
+	if not creep or not Creeps.inRange(creep, pos, Config.Combat.HitRadius + Config.Combat.TargetSlack) then
 		return
 	end
 
 	local crit = rng:NextNumber() < Config.Combat.CritChance
 	local damage = Combat.hitDamage(session) * (if crit then Config.Combat.CritMult else 1)
 	local creepPos = creep.root.Position
-	local killed = Creeps.damage(creep, damage, pos)
+	local killed = Creeps.damage(creep, damage)
 	hitFx:FireAllClients(creep.id, damage, crit, player.UserId)
 	if killed then
 		reward(session, creep, creepPos)

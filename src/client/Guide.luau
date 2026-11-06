@@ -49,7 +49,7 @@ local function nearestCreep(size: number?): Vector3?
 end
 
 local function hitWord(): string
-	return if UserInputService.PreferredInput == Enum.PreferredInput.Touch then "Жми «Удар»" else "Кликай"
+	return if UserInputService.PreferredInput == Enum.PreferredInput.Touch then "Тапай" else "Кликай"
 end
 
 local function current(): Step?
@@ -62,10 +62,10 @@ local function current(): Step?
 		return nil
 	end
 	if not reachedRoad then
-		return { text = "Беги к порталу — за ним крипы", target = Config.World.RoadStart + Vector3.new(4, 0, 0) }
+		return { text = "Беги на тропу — там лагеря крипов", target = Config.World.RoadStart + Vector3.new(4, 0, 0) }
 	end
 	if kills == 0 then
-		return { text = `{hitWord()} рядом с крипом — бей!`, target = nearestCreep(nil) }
+		return { text = `{hitWord()} прямо по крипу — бей!`, target = nearestCreep(nil) }
 	end
 	if d.opened == 0 then
 		if #d.spheres > 0 then
@@ -89,25 +89,29 @@ function Guide.start()
 	gui.ResetOnSpawn = false
 	gui.DisplayOrder = 4
 	gui.ScreenInsets = Enum.ScreenInsets.CoreUISafeInsets
+	-- Подсказка справа, под круглыми кнопками: центр экрана свободен для игры.
 	local hint = Theme.frame("Hint", gui, {
-		Size = UDim2.fromOffset(0, 44),
-		AutomaticSize = Enum.AutomaticSize.X,
-		Position = UDim2.new(0.5, 0, 1, -150),
-		AnchorPoint = Vector2.new(0.5, 1),
-		BackgroundTransparency = 0.1,
+		Size = UDim2.fromOffset(240, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Position = UDim2.new(1, -8, 0.4, 100),
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundTransparency = 0.15,
 		Visible = false,
 	})
-	Theme.corner(hint, UDim.new(0.5, 0))
+	Theme.corner(hint, UDim.new(0, 14))
 	Theme.stroke(hint, COLOR, 2)
 	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft = UDim.new(0, 18)
-	pad.PaddingRight = UDim.new(0, 18)
+	pad.PaddingLeft = UDim.new(0, 12)
+	pad.PaddingRight = UDim.new(0, 12)
+	pad.PaddingTop = UDim.new(0, 8)
+	pad.PaddingBottom = UDim.new(0, 8)
 	pad.Parent = hint
-	local text = Theme.text("Text", hint, "", 20, {
-		Size = UDim2.fromScale(0, 1),
-		AutomaticSize = Enum.AutomaticSize.X,
+	local text = Theme.text("Text", hint, "", 17, {
+		Size = UDim2.fromScale(1, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
 		Font = Theme.Display,
-		TextWrapped = false,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
 	})
 	gui.Parent = player:WaitForChild("PlayerGui")
 

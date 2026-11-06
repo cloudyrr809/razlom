@@ -54,30 +54,33 @@ function Effects.toast(text: string, color: Color3?, seconds: number?)
 end
 
 local function banner(title: string, subtitle: string, color: Color3)
+	-- Лёгкая вспышка по экрану и надпись справа сверху: центр не закрываем.
 	local flash = Theme.frame("Flash", gui, {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundColor3 = color,
-		BackgroundTransparency = 0.35,
+		BackgroundTransparency = 0.75,
 		ZIndex = 5,
 	})
 	Theme.tween(flash, TweenInfo.new(0.9), { BackgroundTransparency = 1 })
 	local holder = Theme.frame("Banner", gui, {
-		Size = UDim2.new(0.8, 0, 0, 110),
-		Position = UDim2.fromScale(0.5, 0.3),
-		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromOffset(320, 70),
+		Position = UDim2.new(1, -12, 0, 8),
+		AnchorPoint = Vector2.new(1, 0),
 		BackgroundTransparency = 1,
 		ZIndex = 6,
 	})
-	local t = Theme.text("Title", holder, title, 54, {
-		Size = UDim2.new(1, 0, 0, 64),
+	local t = Theme.text("Title", holder, title, 34, {
+		Size = UDim2.new(1, 0, 0, 40),
+		TextXAlignment = Enum.TextXAlignment.Right,
 		Font = Theme.Display,
 		TextStrokeTransparency = 0.3,
 		TextStrokeColor3 = color,
 		ZIndex = 6,
 	})
-	local s = Theme.text("Subtitle", holder, subtitle, 24, {
-		Size = UDim2.new(1, 0, 0, 30),
-		Position = UDim2.fromOffset(0, 66),
+	local s = Theme.text("Subtitle", holder, subtitle, 20, {
+		Size = UDim2.new(1, 0, 0, 24),
+		Position = UDim2.fromOffset(0, 42),
+		TextXAlignment = Enum.TextXAlignment.Right,
 		Font = Theme.Display,
 		TextColor3 = color,
 		TextStrokeTransparency = 0.5,
@@ -276,6 +279,7 @@ local function onBaseFx(kind: string, baseIndex: number?, data: any)
 end
 
 function Effects.start()
+	CreepFx.preload({ SOUND_DING, SOUND_KILL, SOUND_BOOM })
 	gui = Instance.new("ScreenGui")
 	gui.Name = "Effects"
 	gui.ResetOnSpawn = false
@@ -285,7 +289,7 @@ function Effects.start()
 	-- Сообщения — слева под Сферами, чтобы не закрывать центр и экран вскрытия.
 	toastList = Theme.frame("Toasts", gui, {
 		Size = UDim2.new(0, 300, 0.4, 0),
-		Position = UDim2.new(0, 10, 0.38, 150),
+		Position = UDim2.new(0, 10, 0.3, 210),
 		AnchorPoint = Vector2.new(0, 0),
 		BackgroundTransparency = 1,
 	})
@@ -306,7 +310,7 @@ function Effects.start()
 		CreepFx.playSound(SOUND_KILL, 0.35, 0.9 + info.streak * 0.04, nil)
 		task.delay(Config.Juice.MagnetTime, Hud.bounceShards)
 		if info.mutation > 0 then
-			CreepFx.playSound(SOUND_BOOM, 1, 0.7, nil)
+			CreepFx.playSound(SOUND_BOOM, 0.7, 0.7, nil)
 			CreepFx.playSound(SOUND_DING, 0.9, 0.6 + info.mutation * 0.1, nil)
 		end
 		if info.sphere then
