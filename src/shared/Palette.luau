@@ -5,14 +5,14 @@ local Palette = {}
 
 Palette.Zones = {
 	{
-		sand = Color3.fromRGB(226, 205, 168),
-		sandDark = Color3.fromRGB(196, 172, 134),
+		sand = Color3.fromRGB(240, 212, 160),
+		sandDark = Color3.fromRGB(214, 178, 124),
 		glow = Color3.fromRGB(110, 200, 255),
 		crystal = Color3.fromRGB(170, 225, 255),
 	},
 	{
-		sand = Color3.fromRGB(190, 110, 72),
-		sandDark = Color3.fromRGB(150, 82, 54),
+		sand = Color3.fromRGB(196, 104, 62),
+		sandDark = Color3.fromRGB(150, 76, 46),
 		glow = Color3.fromRGB(255, 140, 50),
 		crystal = Color3.fromRGB(255, 190, 120),
 	},

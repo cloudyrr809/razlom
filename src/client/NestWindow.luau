@@ -119,7 +119,7 @@ local function buildOdds()
 end
 
 function NestWindow.start()
-	win = Window.new("Nest", "Гнездо", 560, 480)
+	win = Window.new("Nest", "Гнездо", 360, 360, "side")
 	buildOdds()
 
 	local header = Theme.text("Header", win.content, "", 16, {
@@ -225,16 +225,16 @@ function NestWindow.start()
 			if s.minMutation > 0 then
 				label ..= " · мутация гарантирована"
 			end
-			Theme.text("Label", row, label, 16, {
-				Size = UDim2.new(1, -200, 1, 0),
+			Theme.text("Label", row, label, 14, {
+				Size = UDim2.new(1, -184, 1, 0),
 				Position = UDim2.fromOffset(50, 0),
 				TextXAlignment = Enum.TextXAlignment.Left,
 				TextColor3 = if m then Palette.Mutation[s.fromMutation] else Theme.Color.Text,
 			})
 			local price = Formulas.openPrice(s.zone)
 			local free = d.freeOpen
-			local button = Theme.button("Open", row, if free then "Вскрыть · бесплатно" else "Вскрыть · " .. Formulas.short(price), "primary", {
-				Size = UDim2.fromOffset(140, 40),
+			local button = Theme.button("Open", row, if free then "Вскрыть даром" else "Вскрыть · " .. Formulas.short(price), "primary", {
+				Size = UDim2.fromOffset(124, 40),
 				Position = UDim2.new(1, -8, 0.5, 0),
 				AnchorPoint = Vector2.new(1, 0.5),
 				TextSize = 15,

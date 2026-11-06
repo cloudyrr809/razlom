@@ -16,6 +16,8 @@ local InventoryWindow = require(script.InventoryWindow)
 local StationWindow = require(script.StationWindow)
 local NestWindow = require(script.NestWindow)
 local Cosmetics = require(script.Cosmetics)
+local Guide = require(script.Guide)
+local Ambient = require(script.Ambient)
 
 -- Оружие одно и всегда в руке: стандартный рюкзак не нужен.
 pcall(function()
@@ -31,6 +33,8 @@ InventoryWindow.start()
 StationWindow.start()
 NestWindow.start()
 Cosmetics.start()
+Guide.start()
+Ambient.start()
 Hud.onInventory(InventoryWindow.toggle)
 
 -- Окна станции и гнезда открываются сами при подходе и закрываются при уходе.

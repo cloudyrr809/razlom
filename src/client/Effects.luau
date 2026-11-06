@@ -66,6 +66,7 @@ local function banner(title: string, subtitle: string, color: Color3)
 		ZIndex = 6,
 	})
 	local t = Theme.text("Title", holder, title, 54, {
+		Font = Theme.Display,
 		Size = UDim2.new(1, 0, 0, 64),
 		TextColor3 = Theme.Color.Text,
 		TextStrokeTransparency = 0.3,
@@ -73,6 +74,7 @@ local function banner(title: string, subtitle: string, color: Color3)
 		ZIndex = 6,
 	})
 	local s = Theme.text("Subtitle", holder, subtitle, 24, {
+		Font = Theme.Display,
 		Size = UDim2.new(1, 0, 0, 30),
 		Position = UDim2.fromOffset(0, 66),
 		TextColor3 = color,
@@ -190,8 +192,9 @@ local function addCrack(model: Model, hits: number, need: number)
 	crack.CanCollide = false
 	crack.CanQuery = false
 	crack.Material = Enum.Material.Neon
-	crack.Color = core.Color
-	crack.Size = Vector3.new(0.12, 1.2 + hits / need, 0.12)
+	local warm = Color3.fromRGB(255, 190, 80)
+	crack.Color = if hits < Config.Spheres.TeaseFromHit then warm else core.Color
+	crack.Size = Vector3.new(0.16, 1.3 + hits / need, 0.16)
 	crack.CFrame = shell.CFrame * CFrame.Angles(0, angle, math.rad(hits * 23)) * CFrame.new(0, 0, -1.45)
 	crack.Parent = model
 	-- Толчок от удара.
@@ -204,7 +207,7 @@ local function addCrack(model: Model, hits: number, need: number)
 	end)
 	tease(core, hits, need)
 	for _, c in model:GetChildren() do
-		if c.Name == "CrackFx" and c:IsA("BasePart") then
+		if c.Name == "CrackFx" and c:IsA("BasePart") and hits >= Config.Spheres.TeaseFromHit then
 			c.Color = core.Color
 		end
 	end
@@ -266,6 +269,63 @@ local function showWeapon(baseIndex: number, nestIndex: number, weapon: Formulas
 	end)
 end
 
+-- Сфера раскалывается на две половинки, внутри — друза кристаллов цвета выпавшего.
+local function splitSphere(baseIndex: number, nestIndex: number, weapon: Formulas.Weapon)
+	local nest = World.nest(baseIndex, nestIndex)
+	if not nest then
+		return
+	end
+	local center = nest.Position + Vector3.new(0, 2.4, 0)
+	local inner = if weapon.mutation > 0 then Palette.Mutation[weapon.mutation] else Palette.Rarity[weapon.rarity]
+	local stone = Color3.fromRGB(196, 140, 92)
+	local parts: { BasePart } = {}
+	for side = -1, 1, 2 do
+		local half = Instance.new("Part")
+		half.Name = "SphereHalf"
+		half.Anchored = true
+		half.CanCollide = false
+		half.CanQuery = false
+		half.Material = Enum.Material.Sandstone
+		half.Color = stone
+		half.Size = Vector3.new(1.5, 3, 3)
+		half.CFrame = CFrame.new(center + Vector3.new(side * 0.75, 0, 0))
+		local mesh = Instance.new("SpecialMesh")
+		mesh.MeshType = Enum.MeshType.Sphere
+		mesh.Parent = half
+		half.Parent = Workspace
+		-- Внутренняя «друза»: светящийся срез.
+		local cut = Instance.new("Part")
+		cut.Anchored = true
+		cut.CanCollide = false
+		cut.CanQuery = false
+		cut.Material = Enum.Material.Neon
+		cut.Color = inner
+		cut.Size = Vector3.new(0.2, 2.4, 2.4)
+		cut.CFrame = half.CFrame * CFrame.new(-side * 0.7, 0, 0)
+		local cutMesh = Instance.new("SpecialMesh")
+		cutMesh.MeshType = Enum.MeshType.Sphere
+		cutMesh.Parent = cut
+		cut.Parent = Workspace
+		table.insert(parts, half)
+		table.insert(parts, cut)
+		local out = CFrame.new(center + Vector3.new(side * 2.4, -0.8, 0)) * CFrame.Angles(0, 0, math.rad(side * 35))
+		TweenService:Create(half, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { CFrame = out }):Play()
+		TweenService:Create(cut, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			CFrame = out * CFrame.new(-side * 0.7, 0, 0),
+		}):Play()
+	end
+	CreepFx.burst(center, { inner, Color3.new(1, 1, 1) }, 40, 0.7, 20)
+	task.delay(3, function()
+		for _, p in parts do
+			TweenService:Create(p, TweenInfo.new(0.6), { Transparency = 1 }):Play()
+		end
+		task.wait(0.7)
+		for _, p in parts do
+			p:Destroy()
+		end
+	end)
+end
+
 local function onReveal(kind: string, baseIndex: number, nestIndex: number, data: any)
 	local mine = data.owner == player.UserId or (kind == "crack" and baseIndex == Store.data.baseIndex)
 	if kind == "start" then
@@ -290,6 +350,7 @@ local function onReveal(kind: string, baseIndex: number, nestIndex: number, data
 			local r = Config.Rarities[w.rarity]
 			Effects.toast(`Выпало: {Formulas.weaponName(w)} · {r.name}`, if w.mutation > 0 then Palette.Mutation[w.mutation] else Palette.Rarity[w.rarity], 4)
 		end
+		splitSphere(baseIndex, nestIndex, data.weapon)
 		showWeapon(baseIndex, nestIndex, data.weapon)
 	end
 end

@@ -12,7 +12,14 @@ Config.World = {
 	CreepEdgeMargin = 3, -- насколько крипы держатся от края дороги
 	ZoneTrackInterval = 0.25, -- как часто сервер смотрит, кто в какой зоне, сек
 	ZoneSideSlack = 12, -- насколько за краем дороги игрок ещё считается «в зоне»
-	PlazaCenter = Vector3.new(-5, 0, 0),
+	-- Вход в зону 1 (портал). Все базы стоят на дуге вокруг него на одном расстоянии.
+	RoadStart = Vector3.new(30, 0, 0),
+	BaseRingRadius = 118, -- от входа до центра каждой базы
+	BaseArcFrom = 98, -- дуга баз, градусы (0 — вдоль дороги, 180 — прямо за входом)
+	BaseArcTo = 262,
+	BaseRadius = 22,
+	BaseHeight = 5,
+	PlazaCenter = Vector3.new(-28, 0, 0),
 	PlazaRadius = 26,
 }
 

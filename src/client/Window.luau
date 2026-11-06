@@ -41,11 +41,13 @@ function Window.current(): Win?
 end
 
 -- width/height — желаемый размер; на узком экране окно сжимается до экрана.
-function Window.new(name: string, titleText: string, width: number, height: number): Win
+-- dock = "side": панель справа, мир остаётся виден (станция, гнездо).
+function Window.new(name: string, titleText: string, width: number, height: number, dock: string?): Win
+	local side = dock == "side"
 	local root = Theme.frame(name, screen(), {
-		Size = UDim2.fromScale(0.94, 0.8),
-		Position = UDim2.fromScale(0.5, 0.53),
-		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = if side then UDim2.fromScale(0.4, 0.56) else UDim2.fromScale(0.94, 0.8),
+		Position = if side then UDim2.new(1, -90, 0.52, 0) else UDim2.fromScale(0.5, 0.53),
+		AnchorPoint = if side then Vector2.new(1, 0.5) else Vector2.new(0.5, 0.5),
 		Visible = false,
 		BackgroundTransparency = 0.05,
 	})
@@ -57,10 +59,12 @@ function Window.new(name: string, titleText: string, width: number, height: numb
 	Theme.padding(root, 12)
 
 	local title = Theme.text("Title", root, titleText, 24, {
+		Font = Theme.Display,
 		Size = UDim2.new(1, -50, 0, 32),
 		TextXAlignment = Enum.TextXAlignment.Left,
 	})
-	local closeButton = Theme.button("Close", root, "✕", "secondary", {
+	local closeButton = Theme.button("Close", root, "X", "secondary", {
+		Font = Theme.Display,
 		Size = UDim2.fromOffset(40, 36),
 		Position = UDim2.new(1, 0, 0, -2),
 		AnchorPoint = Vector2.new(1, 0),

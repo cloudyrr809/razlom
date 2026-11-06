@@ -8,9 +8,9 @@ local GuiService = game:GetService("GuiService")
 local Theme = {}
 
 Theme.Color = {
-	Panel = Color3.fromRGB(22, 26, 36),
-	PanelSoft = Color3.fromRGB(34, 40, 54),
-	Stroke = Color3.fromRGB(80, 110, 140),
+	Panel = Color3.fromRGB(26, 24, 44),
+	PanelSoft = Color3.fromRGB(40, 38, 64),
+	Stroke = Color3.fromRGB(110, 140, 220),
 	Text = Color3.fromRGB(240, 244, 250),
 	TextDim = Color3.fromRGB(160, 172, 190),
 	Accent = Color3.fromRGB(110, 200, 255),
@@ -25,6 +25,7 @@ Theme.Color = {
 }
 
 Theme.Font = Enum.Font.BuilderSansBold
+Theme.Display = Enum.Font.FredokaOne -- крупные цифры и заголовки
 Theme.FontRegular = Enum.Font.BuilderSans
 Theme.Radius = UDim.new(0, 10)
 Theme.Gap = 8

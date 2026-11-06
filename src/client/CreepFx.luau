@@ -1,6 +1,7 @@
 --!strict
 -- Всё, что видно над крипом и при ударе: полоска HP с регеном, замок «до пробоя»,
--- цифры урона, сплющивание, крит, рассыпание песком и фонтан осколков убийце.
+-- цифры урона, сплющивание, вспышка, крит с тряской камеры, «дыхание» крипа,
+-- рассыпание песком и фонтан осколков убийце.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -8,9 +9,11 @@ local RunService = game:GetService("RunService")
 local SoundService = game:GetService("SoundService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
+local GuiService = game:GetService("GuiService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local Formulas = require(ReplicatedStorage.Shared.Formulas)
+local Models = require(ReplicatedStorage.Shared.Models)
 local Palette = require(ReplicatedStorage.Shared.Palette)
 local Store = require(script.Parent.Store)
 local Theme = require(script.Parent.Theme)
@@ -30,29 +33,31 @@ type View = {
 	fill: Frame,
 	regen: Frame,
 	lock: TextLabel,
-	lockBar: Frame,
+	title: TextLabel,
 	lastHit: number,
-	cracks: { BasePart },
+	glowing: { BasePart },
+	body: SpecialMesh?,
+	cap: SpecialMesh?,
+	phase: number,
+	squashUntil: number,
+	mutation: number,
 }
 local views: { [number]: View } = {}
 
 local SOUND_HIT = "rbxasset://sounds/swordslash.wav"
 local SOUND_CRIT = "rbxasset://sounds/electronicpingshort.wav"
+local SQUASH_TIME = 0.16
 
 local function playSound(id: string, volume: number, pitch: number, at: BasePart?)
 	local s = Instance.new("Sound")
 	s.SoundId = id
 	s.Volume = volume
 	s.PlaybackSpeed = pitch
+	s.RollOffMaxDistance = 80
 	s.Parent = at or SoundService
 	s:Play()
-	s.Ended:Once(function()
+	task.delay(3, function()
 		s:Destroy()
-	end)
-	task.delay(4, function()
-		if s.Parent then
-			s:Destroy()
-		end
 	end)
 end
 CreepFx.playSound = playSound
@@ -60,6 +65,12 @@ CreepFx.playSound = playSound
 local function num(model: Instance, name: string): number
 	local v = model:GetAttribute(name)
 	return if type(v) == "number" then v else 0
+end
+
+local function meshOf(model: Model, name: string): SpecialMesh?
+	local p = model:FindFirstChild(name)
+	local m = p and p:FindFirstChildOfClass("SpecialMesh")
+	return m
 end
 
 local function bind(model: Instance)
@@ -77,19 +88,38 @@ local function bind(model: Instance)
 
 	local gui = Instance.new("BillboardGui")
 	gui.Name = "CreepGui"
-	gui.Size = UDim2.fromScale(math.max(3.2, s.radius * 2.2), 1.6)
-	gui.StudsOffset = Vector3.new(0, s.height / 2 + 1.4, 0)
-	gui.MaxDistance = 90
+	gui.Size = UDim2.fromScale(math.max(3, s.radius * 1.8), 1.3)
+	gui.StudsOffset = Vector3.new(0, s.height / 2 + 1, 0)
+	gui.MaxDistance = 70
 	gui.LightInfluence = 0
 	gui.Adornee = root
+	gui.Enabled = false
 
+	local m = Config.CreepMutations[mutation]
+	local title = Theme.text("Title", gui, if m then m.name else "", 14, {
+		Size = UDim2.fromScale(1, 0.38),
+		TextScaled = true,
+		Font = Theme.Display,
+		TextColor3 = if m then Palette.Mutation[mutation] else Theme.Color.Text,
+		TextStrokeTransparency = 0.3,
+		Visible = m ~= nil,
+	})
+	local lock = Theme.text("Lock", gui, "", 14, {
+		Size = UDim2.fromScale(1, 0.38),
+		TextScaled = true,
+		Font = Theme.Display,
+		TextColor3 = Theme.Color.Crit,
+		TextStrokeTransparency = 0.3,
+		Visible = false,
+	})
 	local bar = Theme.frame("Bar", gui, {
-		Size = UDim2.fromScale(1, 0.32),
-		Position = UDim2.fromScale(0, 0.68),
-		BackgroundColor3 = Color3.fromRGB(20, 20, 24),
-		BackgroundTransparency = 0.2,
+		Size = UDim2.fromScale(1, 0.3),
+		Position = UDim2.fromScale(0, 0.55),
+		BackgroundColor3 = Color3.fromRGB(16, 14, 22),
+		BackgroundTransparency = 0.15,
 	})
 	Theme.corner(bar, UDim.new(0.5, 0))
+	Theme.stroke(bar, Color3.fromRGB(0, 0, 0), 1)
 	local regen = Theme.frame("Regen", bar, {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundColor3 = Theme.Color.Good,
@@ -98,40 +128,20 @@ local function bind(model: Instance)
 	Theme.corner(regen, UDim.new(0.5, 0))
 	local fill = Theme.frame("Fill", bar, {
 		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = Color3.fromRGB(235, 70, 70),
+		BackgroundColor3 = Color3.fromRGB(255, 80, 70),
 		BackgroundTransparency = 0,
 	})
 	Theme.corner(fill, UDim.new(0.5, 0))
-
-	local m = Config.CreepMutations[mutation]
-	local title = if m then m.name .. " · " .. s.name else s.name
-	Theme.text("Title", gui, title, 14, {
-		Size = UDim2.fromScale(1, 0.34),
-		Position = UDim2.fromScale(0, 0.32),
-		TextScaled = true,
-		TextColor3 = if m then Palette.Mutation[mutation] else Theme.Color.Text,
-		TextStrokeTransparency = 0.5,
-	})
-	local lock = Theme.text("Lock", gui, "", 14, {
-		Size = UDim2.fromScale(1, 0.32),
-		Position = UDim2.fromScale(0, 0),
-		TextScaled = true,
-		TextColor3 = Theme.Color.Crit,
-		TextStrokeTransparency = 0.4,
-		Visible = false,
-	})
-	local lockBar = Theme.frame("LockBar", lock, {
-		Size = UDim2.fromOffset(0, 3),
-		Position = UDim2.fromScale(0, 1),
-		BackgroundColor3 = Theme.Color.Crit,
-		BackgroundTransparency = 0,
-	})
+	local grad = Instance.new("UIGradient")
+	grad.Color = ColorSequence.new(Color3.fromRGB(255, 120, 90), Color3.fromRGB(230, 50, 60))
+	grad.Rotation = 90
+	grad.Parent = fill
 	gui.Parent = root
 
-	local cracks = {}
+	local glowing = {}
 	for _, d in model:GetChildren() do
-		if d:IsA("BasePart") and d.Name == "Crack" then
-			table.insert(cracks, d)
+		if d:IsA("BasePart") and (d.Name == "Crack" or d.Name == "Eye") then
+			table.insert(glowing, d)
 		end
 	end
 
@@ -142,9 +152,14 @@ local function bind(model: Instance)
 		fill = fill,
 		regen = regen,
 		lock = lock,
-		lockBar = lockBar,
+		title = title,
 		lastHit = 0,
-		cracks = cracks,
+		glowing = glowing,
+		body = meshOf(model, "Body"),
+		cap = meshOf(model, "Cap"),
+		phase = math.random() * 10,
+		squashUntil = 0,
+		mutation = mutation,
 	}
 
 	-- Звук и подсказка для Золотого и реже, если игрок в той же зоне.
@@ -164,28 +179,41 @@ local function updateView(v: View, t: number)
 	local hp, maxHp = num(v.model, "Hp"), math.max(num(v.model, "MaxHp"), 0.001)
 	local frac = math.clamp(hp / maxHp, 0, 1)
 	v.fill.Size = UDim2.fromScale(frac, 1)
-	-- Зелёная полоска показывает, сколько крип откатит за ближайшую секунду.
-	local regenFrac = math.clamp(frac + Config.Creeps.RegenPerSecond, 0, 1)
-	v.regen.Size = UDim2.fromScale(regenFrac, 1)
+	-- Зелёная полоска — сколько крип откатит за ближайшую секунду.
+	v.regen.Size = UDim2.fromScale(math.clamp(frac + Config.Creeps.RegenPerSecond, 0, 1), 1)
 	v.regen.Visible = frac < 1
 
+	local dist = World.distanceTo(v.root.Position)
 	local regen = Formulas.regenPerSecond(maxHp)
 	local dps = Store.dps()
 	local locked = dps <= regen
 	v.lock.Visible = locked
+	v.title.Visible = not locked and v.mutation > 0
 	if locked then
-		local pct = math.floor(dps / regen * 100)
-		v.lock.Text = `🔒 до пробоя: {pct}%`
-		v.lockBar.Size = UDim2.new(pct / 100, 0, 0, 3)
+		v.lock.Text = `🔒 до пробоя {math.floor(dps / regen * 100)}%`
 	end
-	local inCombat = t - v.lastHit < Config.Creeps.InCombatTime
-	v.gui.Enabled = frac < 1 or locked or inCombat or World.distanceTo(v.root.Position) < 30
+	local inCombat = t - v.lastHit < 3
+	v.gui.Enabled = inCombat or frac < 0.999 or (locked and dist < 28) or (v.mutation > 0 and dist < 45)
 
-	-- Призматический переливается.
-	if num(v.model, "Mutation") == 3 then
-		local c = Color3.fromHSV((t * 0.3) % 1, 0.6, 1)
-		for _, crack in v.cracks do
-			crack.Color = c
+	-- «Дыхание» и сплющивание от удара — через масштаб мешей.
+	local breathe = math.sin(t * 2.2 + v.phase) * 0.035
+	local squash = 0
+	if t < v.squashUntil then
+		local k = 1 - (v.squashUntil - t) / SQUASH_TIME
+		squash = math.sin(k * math.pi) * 0.28
+	end
+	if v.body then
+		v.body.Scale = Vector3.new(1 + squash * 0.6, 1 + breathe - squash, 1 + squash * 0.6)
+	end
+	if v.cap then
+		v.cap.Scale = Vector3.new(1 + squash * 0.5 - breathe * 0.5, 1 - squash * 0.7, 1 + squash * 0.5 - breathe * 0.5)
+	end
+	-- Трещины и глаза мерцают; Призматический переливается.
+	local pulse = 0.5 + math.sin(t * 3 + v.phase) * 0.5
+	for _, g in v.glowing do
+		g.Transparency = 0.25 * pulse
+		if v.mutation == 3 then
+			g.Color = Color3.fromHSV((t * 0.3 + v.phase) % 1, 0.6, 1)
 		end
 	end
 end
@@ -198,65 +226,74 @@ local function floatText(at: Vector3, text: string, color: Color3, big: boolean)
 	anchor.CanTouch = false
 	anchor.Transparency = 1
 	anchor.Size = Vector3.one * 0.1
-	anchor.Position = at + Vector3.new((math.random() - 0.5) * 2, 0, (math.random() - 0.5) * 2)
+	anchor.Position = at + Vector3.new((math.random() - 0.5) * 2.5, 0, (math.random() - 0.5) * 2.5)
 	anchor.Parent = Workspace
 	local gui = Instance.new("BillboardGui")
-	gui.Size = UDim2.fromOffset(if big then 160 else 110, if big then 64 else 42)
+	gui.Size = UDim2.fromOffset(if big then 170 else 110, if big then 70 else 44)
 	gui.AlwaysOnTop = true
 	gui.LightInfluence = 0
 	gui.Adornee = anchor
-	local label = Theme.text("Number", gui, text, if big then 42 else 28, {
+	local label = Theme.text("Number", gui, text, if big then 46 else 30, {
 		Size = UDim2.fromScale(1, 1),
+		Font = Theme.Display,
 		TextColor3 = color,
-		TextStrokeTransparency = 0.2,
+		TextStrokeTransparency = 0,
+		TextStrokeColor3 = Color3.fromRGB(30, 20, 10),
 	})
+	local scale = Instance.new("UIScale")
+	scale.Scale = if big then 1.6 else 1.25
+	scale.Parent = label
 	gui.Parent = anchor
-	local info = TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	TweenService:Create(anchor, info, { Position = anchor.Position + Vector3.new(0, 4, 0) }):Play()
-	TweenService:Create(label, info, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
-	task.delay(0.85, function()
+	TweenService:Create(scale, TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	local info = TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	TweenService:Create(anchor, info, { Position = anchor.Position + Vector3.new(0, 4.5, 0) }):Play()
+	task.delay(0.45, function()
+		TweenService:Create(label, TweenInfo.new(0.45), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+	end)
+	task.delay(0.95, function()
 		anchor:Destroy()
 	end)
 end
 CreepFx.floatText = floatText
 
-local function squash(v: View)
-	local body = v.model:FindFirstChild("Body")
-	if body and body:IsA("BasePart") and not body:GetAttribute("Squashing") then
-		body:SetAttribute("Squashing", true)
-		local size = body.Size
-		local info = TweenInfo.new(0.07, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true)
-		local tw = TweenService:Create(body, info, { Size = Vector3.new(size.X * 0.7, size.Y * 1.15, size.Z * 1.15) })
-		tw:Play()
-		tw.Completed:Once(function()
-			body.Size = size
-			body:SetAttribute("Squashing", nil)
-		end)
-	end
+local function flash(model: Model, color: Color3)
+	local h = Instance.new("Highlight")
+	h.FillColor = color
+	h.FillTransparency = 0.35
+	h.OutlineTransparency = 1
+	h.DepthMode = Enum.HighlightDepthMode.Occluded
+	h.Parent = model
+	TweenService:Create(h, TweenInfo.new(0.18), { FillTransparency = 1 }):Play()
+	task.delay(0.2, function()
+		h:Destroy()
+	end)
 end
 
--- Короткие светящиеся «осколки», летящие из крипа (Крупный при ударе и все при смерти).
+local shakeUntil, shakePower = 0, 0
+local function shake(power: number, seconds: number)
+	if GuiService.ReducedMotionEnabled then
+		return
+	end
+	shakeUntil = os.clock() + seconds
+	shakePower = power
+end
+
+-- Осколки-кристаллы: вылетают фонтаном и, если задана цель, летят в неё.
 local function chips(from: Vector3, to: Vector3?, count: number, color: Color3, duration: number)
 	for _ = 1, count do
-		local p = Instance.new("Part")
-		p.Anchored = true
-		p.CanCollide = false
-		p.CanQuery = false
-		p.CanTouch = false
-		p.Material = Enum.Material.Neon
-		p.Color = color
-		p.Size = Vector3.one * 0.45
-		p.CFrame = CFrame.new(from) * CFrame.Angles(math.random() * 6, math.random() * 6, 0)
+		local p = Models.shard(CFrame.new(from) * CFrame.Angles(math.random() * 6, math.random() * 6, 0), color, 0.6 + math.random() * 0.5)
 		p.Parent = Workspace
-		local spread = Vector3.new(math.random() - 0.5, math.random() * 0.8 + 0.6, math.random() - 0.5) * 6
+		local spread = Vector3.new(math.random() - 0.5, math.random() * 0.8 + 0.7, math.random() - 0.5) * 7
 		local mid = from + spread
-		local goal = to or (mid + Vector3.new(0, -3, 0))
-		TweenService:Create(p, TweenInfo.new(duration * 0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = mid }):Play()
+		TweenService:Create(p, TweenInfo.new(duration * 0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			CFrame = CFrame.new(mid) * CFrame.Angles(math.random() * 6, math.random() * 6, 0),
+		}):Play()
 		task.delay(duration * 0.4, function()
 			if p.Parent then
+				local goal = to or (mid + Vector3.new(0, -3, 0))
 				TweenService:Create(p, TweenInfo.new(duration * 0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-					Position = goal,
-					Size = Vector3.one * 0.15,
+					CFrame = CFrame.new(goal),
+					Size = p.Size * 0.3,
 				}):Play()
 			end
 		end)
@@ -267,7 +304,7 @@ local function chips(from: Vector3, to: Vector3?, count: number, color: Color3, 
 end
 CreepFx.chips = chips
 
-local function sandBurst(pos: Vector3, zone: number, size: number)
+local function burst(pos: Vector3, colors: { Color3 }, count: number, sizeFrom: number, speed: number)
 	local p = Instance.new("Part")
 	p.Anchored = true
 	p.CanCollide = false
@@ -278,20 +315,21 @@ local function sandBurst(pos: Vector3, zone: number, size: number)
 	p.Position = pos
 	p.Parent = Workspace
 	local e = Instance.new("ParticleEmitter")
-	local colors = Palette.Zones[zone] or Palette.Zones[1]
-	e.Color = ColorSequence.new(colors.sand, colors.sandDark)
-	e.Size = NumberSequence.new(0.6 + size * 0.3, 0)
-	e.Lifetime = NumberRange.new(0.5, 1)
-	e.Speed = NumberRange.new(6, 14)
+	e.Color = ColorSequence.new(colors[1], colors[2] or colors[1])
+	e.Size = NumberSequence.new(sizeFrom, 0)
+	e.Lifetime = NumberRange.new(0.5, 1.1)
+	e.Speed = NumberRange.new(speed * 0.5, speed)
 	e.SpreadAngle = Vector2.new(180, 180)
 	e.Acceleration = Vector3.new(0, -30, 0)
+	e.Drag = 2
 	e.Rate = 0
 	e.Parent = p
-	e:Emit(14 + size * 10)
-	task.delay(1.2, function()
+	e:Emit(count)
+	task.delay(1.4, function()
 		p:Destroy()
 	end)
 end
+CreepFx.burst = burst
 
 local function onHit(creepId: number, damage: number, crit: boolean, attacker: number)
 	local v = views[creepId]
@@ -299,32 +337,41 @@ local function onHit(creepId: number, damage: number, crit: boolean, attacker: n
 		return
 	end
 	v.lastHit = os.clock()
+	v.squashUntil = os.clock() + SQUASH_TIME
 	local top = v.root.Position + Vector3.new(0, v.root.Size.Y / 2 + 0.5, 0)
 	local mine = attacker == player.UserId
+	local zone = math.max(1, num(v.model, "Zone"))
 	if crit then
 		floatText(top, Formulas.short(damage) .. "!", Theme.Color.Crit, true)
 	else
-		floatText(top, Formulas.short(damage), if mine then Theme.Color.Text else Theme.Color.TextDim, false)
+		floatText(top, Formulas.short(damage), if mine then Color3.fromRGB(255, 255, 255) else Theme.Color.TextDim, false)
 	end
-	squash(v)
 	if mine then
-		playSound(if crit then SOUND_CRIT else SOUND_HIT, if crit then 0.5 else 0.25, if crit then 1.4 else 1 + math.random() * 0.2, v.root)
+		flash(v.model, if crit then Theme.Color.Crit else Color3.new(1, 1, 1))
+		playSound(if crit then SOUND_CRIT else SOUND_HIT, if crit then 0.5 else 0.22, if crit then 1.4 else 0.9 + math.random() * 0.25, v.root)
+		burst(top - Vector3.new(0, 1, 0), { Palette.Zones[zone].sand, Palette.Zones[zone].glow }, if crit then 14 else 5, 0.5, 14)
+		if crit then
+			shake(0.25, 0.15)
+		end
 	end
 	if num(v.model, "Size") == 3 then
-		local zone = math.max(1, num(v.model, "Zone"))
 		chips(top, nil, 3, Palette.Zones[zone].glow, 0.6)
 	end
 end
 
 local function onKill(info: any)
 	local zone, size = info.zone :: number, info.size :: number
-	sandBurst(info.pos, zone, size)
+	local colors = Palette.Zones[zone] or Palette.Zones[1]
+	burst(info.pos, { colors.sand, colors.sandDark }, 16 + size * 12, 0.8 + size * 0.3, 18)
 	if info.killer == player.UserId then
 		local root = World.root()
 		if root then
-			chips(info.pos + Vector3.new(0, 1, 0), root.Position, math.clamp(3 + size * 2, 3, 12), Palette.Zones[zone].glow, 0.7)
+			chips(info.pos + Vector3.new(0, 1, 0), root.Position, math.clamp(3 + size * 3, 3, 14), Theme.Color.Shards, 0.75)
 		end
-		floatText(info.pos + Vector3.new(0, 3, 0), "+" .. Formulas.short(info.shards), Theme.Color.Shards, true)
+		floatText(info.pos + Vector3.new(0, 3.5, 0), "+" .. Formulas.short(info.shards), Theme.Color.Shards, true)
+		if size == 3 then
+			shake(0.35, 0.2)
+		end
 	end
 end
 
@@ -342,6 +389,13 @@ function CreepFx.start()
 		local t = os.clock()
 		for _, v in views do
 			updateView(v, t)
+		end
+		if t < shakeUntil then
+			local camera = Workspace.CurrentCamera
+			if camera then
+				local p = shakePower * (shakeUntil - t) * 5
+				camera.CFrame *= CFrame.new((math.random() - 0.5) * p, (math.random() - 0.5) * p, 0)
+			end
 		end
 	end)
 end
