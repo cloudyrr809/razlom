@@ -104,10 +104,10 @@ local function rock(parent, pos, size, color, material)
 end
 
 -- Кристалл: вытянутый блок с острым верхом (клин сверху).
-local function crystal(parent, pos, height, color, tilt)
+local function crystal(parent, pos, height, color, tilt, widthK)
 	local m = Instance.new("Model")
 	m.Name = "Crystal"
-	local w = height * 0.32
+	local w = height * (widthK or 0.32)
 	local cf = CFrame.new(pos) * CFrame.Angles(tilt.X, tilt.Y, tilt.Z)
 	deco(m, {
 		Name = "Shaft",
@@ -140,6 +140,161 @@ local function crystal(parent, pos, height, color, tilt)
 	light.Range = height * 1.6
 	light.Brightness = 0.9
 	light.Parent = core
+	m.Parent = parent
+	return m
+end
+
+-- Монолит: ступенчатый постамент с рунными камнями, главный кристалл в кластере малых,
+-- парящее кольцо осколков (клиент вращает, тег Spin) и луч в небо.
+-- Опорная точка (WorldPivot) — та же, что у прежнего одиночного кристалла: от неё считают ярусы и эффекты.
+local function monolith(parent, top, color)
+	local m = Instance.new("Model")
+	m.Name = "Monolith"
+	local stone = Color3.fromRGB(130, 128, 136)
+	local dark = Color3.fromRGB(92, 90, 100)
+	local glowColor = color:Lerp(Color3.new(1, 1, 1), 0.2)
+
+	-- Три ступени, между ними светящиеся пояса.
+	local steps = { { r = 6, h = 0.8 }, { r = 4.9, h = 0.8 }, { r = 3.8, h = 1 } }
+	local y = 0
+	for i, s in steps do
+		block(m, {
+			Name = "MonolithPedestal",
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(s.h, s.r * 2, s.r * 2),
+			CFrame = CFrame.new(top + Vector3.new(0, y + s.h / 2, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+			Color = if i == 2 then dark else stone,
+			Material = Enum.Material.Slate,
+		})
+		if i < #steps then
+			glow(deco(m, {
+				Name = "Band",
+				Shape = Enum.PartType.Cylinder,
+				Size = Vector3.new(0.12, s.r * 2 - 0.5, s.r * 2 - 0.5),
+				CFrame = CFrame.new(top + Vector3.new(0, y + s.h + 0.02, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+				Color = glowColor,
+				Material = Enum.Material.Neon,
+				Transparency = 0.2,
+			}))
+		end
+		y += s.h
+	end
+	local floor = top + Vector3.new(0, y, 0)
+
+	-- Рунные камни по краю нижней ступени: стоячий камень и светящаяся руна на нём.
+	for k = 0, 3 do
+		local a = math.rad(k * 90 + 45)
+		local dir = Vector3.new(math.cos(a), 0, math.sin(a))
+		local at = CFrame.lookAt(top + dir * 5.2 + Vector3.new(0, 0.8 + 1.1, 0), top + Vector3.new(0, 1.9, 0))
+		block(m, {
+			Name = "RuneStone",
+			Size = Vector3.new(1.2, 2.2, 0.7),
+			CFrame = at * CFrame.Angles(math.rad(-6), 0, math.rad(rng:NextNumber(-4, 4))),
+			Color = dark,
+			Material = Enum.Material.Slate,
+		})
+		glow(deco(m, {
+			Name = "Rune",
+			Size = Vector3.new(0.3, 1.3, 0.08),
+			CFrame = at * CFrame.Angles(math.rad(-6), 0, 0) * CFrame.new(0, 0.1, 0.36), -- наружная сторона камня
+			Color = glowColor,
+			Material = Enum.Material.Neon,
+		}))
+		glow(deco(m, {
+			Name = "Rune",
+			Size = Vector3.new(0.8, 0.22, 0.08),
+			CFrame = at * CFrame.Angles(math.rad(-6), 0, 0) * CFrame.new(0, 0.35, 0.36) * CFrame.Angles(0, 0, math.rad(25)),
+			Color = glowColor,
+			Material = Enum.Material.Neon,
+		}))
+	end
+
+	-- Главный кристалл и кластер вокруг него, наклонённый наружу.
+	local mainH = 12
+	-- Главный тоньше обычного кристалла: толстый выглядел блоком.
+	crystal(m, floor, mainH, color, Vector3.zero, 0.2).Name = "MainCrystal"
+	for k = 0, 4 do
+		local a = math.rad(k * 72 + rng:NextNumber(-12, 12))
+		local hgt = rng:NextNumber(3.5, 6)
+		local lean = math.rad(rng:NextNumber(22, 36))
+		local pos = floor + Vector3.new(math.cos(a), 0, math.sin(a)) * 2.3
+		local c = crystal(m, pos, hgt, color:Lerp(Color3.new(1, 1, 1), rng:NextNumber(0, 0.25)), Vector3.zero, 0.24)
+		-- Наклон наружу: поворот вокруг основания по оси «вверх × наружу».
+		local dir = Vector3.new(math.cos(a), 0, math.sin(a))
+		local turn = CFrame.new(pos) * CFrame.fromAxisAngle(Vector3.yAxis:Cross(dir), lean) * CFrame.new(-pos)
+		c:PivotTo(turn * c:GetPivot())
+		local core = c:FindFirstChild("Core")
+		local light = core and core:FindFirstChildOfClass("PointLight")
+		if light then
+			light:Destroy() -- свет даёт главный кристалл, лишние источники — лишняя нагрузка
+		end
+	end
+	-- Осколки у подножия.
+	for _ = 1, 7 do
+		local a = rng:NextNumber(0, math.pi * 2)
+		local d = rng:NextNumber(2.6, 3.5)
+		deco(m, {
+			Name = "Shard",
+			Size = Vector3.new(0.4, rng:NextNumber(0.7, 1.4), 0.4),
+			CFrame = CFrame.new(floor + Vector3.new(math.cos(a) * d, 0.3, math.sin(a) * d)) * CFrame.Angles(rng:NextNumber(-0.6, 0.6), rng:NextNumber(0, math.pi), rng:NextNumber(-0.6, 0.6)),
+			Color = color,
+			Material = Enum.Material.Glass,
+			Transparency = 0.15,
+		})
+	end
+
+	-- Парящее кольцо из осколков на середине кристалла, клиент его медленно вращает.
+	local halo = Instance.new("Model")
+	halo.Name = "Halo"
+	local haloCenter = floor + Vector3.new(0, mainH * 0.55, 0)
+	local haloCount = 12
+	for k = 1, haloCount do
+		local a = k / haloCount * math.pi * 2
+		glow(deco(halo, {
+			Name = "HaloShard",
+			Size = Vector3.new(0.35, 0.9, 0.35),
+			CFrame = CFrame.new(haloCenter + Vector3.new(math.cos(a) * 3.6, math.sin(a * 3) * 0.25, math.sin(a) * 3.6)) * CFrame.Angles(0, -a, math.rad(30)),
+			Color = glowColor,
+			Material = Enum.Material.Neon,
+			Transparency = 0.1,
+		}))
+	end
+	halo.WorldPivot = CFrame.new(haloCenter)
+	halo:SetAttribute("Speed", 0.35) -- радиан в секунду
+	CollectionService:AddTag(halo, "Spin")
+	halo.Parent = m
+
+	-- Луч в небо: виден издалека, помогает найти свою базу.
+	deco(m, {
+		Name = "Beam",
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(60, 0.6, 0.6),
+		CFrame = CFrame.new(floor + Vector3.new(0, mainH + 30, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+		Color = glowColor,
+		Material = Enum.Material.Neon,
+		Transparency = 0.6,
+	})
+
+	-- Искры поднимаются от подножия.
+	local emitterPart = deco(m, {
+		Name = "Sparks",
+		Size = Vector3.new(4, 0.2, 4),
+		CFrame = CFrame.new(floor + Vector3.new(0, 0.2, 0)),
+		Transparency = 1,
+	})
+	local pe = Instance.new("ParticleEmitter")
+	pe.Color = ColorSequence.new(glowColor)
+	pe.LightEmission = 1
+	pe.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.25), NumberSequenceKeypoint.new(1, 0) })
+	pe.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(1, 1) })
+	pe.Lifetime = NumberRange.new(2, 3.5)
+	pe.Rate = 6
+	pe.Speed = NumberRange.new(1.5, 3)
+	pe.SpreadAngle = Vector2.new(15, 15)
+	pe.Parent = emitterPart
+
+	-- Опорная точка как у прежнего Монолита (кристалл 13 на высоте top + 1.6).
+	m.WorldPivot = CFrame.new(top + Vector3.new(0, 1.6 + 13 / 2, 0))
 	m.Parent = parent
 	return m
 end
@@ -787,17 +942,8 @@ for index = 1, count do
 		crack(base, top + Vector3.new(math.cos(ang), 0, math.sin(ang)) * R * 0.55 + Vector3.new(0, 0.05, 0), Vector3.new(math.cos(ang), 0, math.sin(ang)), R * 0.4, 0.3, Palette.Zones[1].glow, 1)
 	end
 
-	-- Монолит: высокий кристалл на круглом постаменте (уровни и цвет — Шаг 2).
-	block(base, {
-		Name = "MonolithPedestal",
-		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(1.6, 9, 9),
-		CFrame = CFrame.new(top + Vector3.new(0, 0.8, 0)) * CFrame.Angles(0, 0, math.rad(90)),
-		Color = Color3.fromRGB(130, 128, 136),
-		Material = Enum.Material.Slate,
-	})
-	local mono = crystal(base, top + Vector3.new(0, 1.6, 0), 13, Color3.fromRGB(160, 215, 255), Vector3.zero)
-	mono.Name = "Monolith"
+	-- Монолит (ярусы растут поверх — сервер, Monolith.luau).
+	monolith(base, top, Color3.fromRGB(160, 215, 255))
 
 	-- Кольцо постаментов вокруг Монолита: 10 мест, работают первые 3 + 1 за ярус.
 	for k = 1, Config.Monolith.MaxPedestals do

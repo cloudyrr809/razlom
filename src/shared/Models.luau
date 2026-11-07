@@ -45,7 +45,8 @@ function Models.creepLook(zone: number, mutation: number): CreepLook
 	local colors = Palette.Zones[zone] or Palette.Zones[1]
 	local look: CreepLook = {
 		body = colors.sand:Lerp(Color3.fromRGB(200, 190, 170), 0.3),
-		cap = colors.sand:Lerp(Color3.fromRGB(230, 220, 200), 0.25),
+		-- Шляпка темнее и теплее ножки: силуэт читается издалека.
+		cap = colors.sand:Lerp(Color3.fromRGB(165, 105, 70), 0.5),
 		glow = colors.glow,
 		material = Enum.Material.Sand,
 	}
@@ -123,6 +124,13 @@ function Models.creep(zone: number, size: number, mutation: number, cf: CFrame):
 		local len = r * rng:NextNumber(0.7, 1.1)
 		add(blob("Foot", Vector3.new(r * 0.32 * w, h * 0.1, len), bottom * CFrame.Angles(0, a, 0) * CFrame.new(0, h * 0.04, -r * 0.55) * CFrame.Angles(math.rad(8), 0, 0), look.body:Lerp(Color3.new(0, 0, 0), 0.15), look.material))
 	end
+	-- Холмик песка, из которого крип растёт: пара бугорков цвета земли, а не тёмная «тарелка».
+	local ground = (Palette.Zones[zone] or Palette.Zones[1]).sand
+	for i = 1, 3 do
+		local a = (i + rng:NextNumber(-0.3, 0.3)) / 3 * math.pi * 2
+		local d = r * rng:NextNumber(0.75, 1.05)
+		add(blob("Mound", Vector3.new(d, h * 0.06, d * 0.8), bottom * CFrame.Angles(0, a, 0) * CFrame.new(0, h * 0.01, -r * 0.45), ground:Lerp(Color3.new(0, 0, 0), 0.06), Enum.Material.Sand))
+	end
 	-- Ножка: широкое основание и сама ножка.
 	local bodyH = h * 0.5 * tall
 	-- Луковица внизу и узкая ножка, глубоко входящая в неё: без «снеговика» из шаров.
@@ -130,11 +138,40 @@ function Models.creep(zone: number, size: number, mutation: number, cf: CFrame):
 	solid(blob("Body", Vector3.new(r * 1.15 * w, bodyH * 1.3, r * 1.1 * w), bottom * CFrame.new(0, h * 0.1 + bodyH * 0.5, 0), look.body, look.material))
 	-- Юбочка под шляпкой.
 	add(blob("Skirt", Vector3.new(r * 1.35 * w, h * 0.06, r * 1.35 * w), bottom * CFrame.new(0, h * 0.1 + bodyH * 0.86, 0), look.cap:Lerp(Color3.new(1, 1, 1), 0.25), look.material))
-	-- Глаза: две светящиеся щёлочки на ножке.
+	-- Лицо: глаза-щёлочки в тёмных впадинах, зрачки, надбровья и рот.
+	local dark = look.body:Lerp(Color3.new(0, 0, 0), 0.6)
 	local eyeGap = r * rng:NextNumber(0.24, 0.36)
+	local eyeY = h * 0.1 + bodyH * 0.68
+	local faceZ = -r * 0.55 * w
 	for side = -1, 1, 2 do
-		add(blob("Eye", Vector3.new(r * 0.3, r * 0.12, r * 0.1), bottom * CFrame.new(side * eyeGap, h * 0.1 + bodyH * 0.68, -r * 0.55 * w) * CFrame.Angles(0, 0, side * math.rad(rng:NextNumber(4, 14))), look.glow, Enum.Material.Neon))
+		local slant = side * math.rad(rng:NextNumber(4, 14))
+		local at = bottom * CFrame.new(side * eyeGap, eyeY, faceZ) * CFrame.Angles(0, 0, slant)
+		add(blob("Socket", Vector3.new(r * 0.38, r * 0.2, r * 0.1), at * CFrame.new(0, 0, r * 0.02), dark, Enum.Material.SmoothPlastic))
+		add(blob("Eye", Vector3.new(r * 0.3, r * 0.12, r * 0.1), at, look.glow, Enum.Material.Neon))
+		add(blob("Pupil", Vector3.new(r * 0.07, r * 0.07, r * 0.06), at * CFrame.new(-side * r * 0.03, 0, -r * 0.04), Color3.new(1, 1, 1), Enum.Material.Neon))
+		add(blob("Brow", Vector3.new(r * 0.42, r * 0.09, r * 0.16), at * CFrame.new(side * r * 0.02, r * 0.14, -r * 0.01) * CFrame.Angles(0, 0, -side * math.rad(18)), look.body:Lerp(look.cap, 0.4), look.material))
 	end
+	add(blob("Mouth", Vector3.new(r * rng:NextNumber(0.26, 0.4), r * 0.07, r * 0.08), bottom * CFrame.new(0, eyeY - r * 0.32, faceZ * 1.02), dark, Enum.Material.SmoothPlastic))
+	-- Прожилки на ножке: сзади и по бокам, чтобы не лезли на лицо.
+	local bodyMid = h * 0.1 + bodyH * 0.5
+	for _ = 1, V.BodyStreaks do
+		local a = rng:NextNumber(math.pi * 0.4, math.pi * 1.6)
+		add(part({
+			Name = "Streak",
+			Size = Vector3.new(r * 0.05 + 0.04, bodyH * rng:NextNumber(0.45, 0.75), 0.06),
+			CFrame = bottom * CFrame.new(0, bodyMid, 0) * CFrame.Angles(0, a, 0) * CFrame.new(0, 0, -r * 0.56 * w) * CFrame.Angles(0, 0, math.rad(rng:NextNumber(-8, 8))),
+			Color = dark,
+			Material = look.material,
+		}))
+	end
+	-- Одна светящаяся трещина на боку ножки.
+	add(part({
+		Name = "Crack",
+		Size = Vector3.new(r * 0.06 + 0.05, bodyH * 0.4, 0.07),
+		CFrame = bottom * CFrame.new(0, bodyMid, 0) * CFrame.Angles(0, rng:NextNumber(math.pi * 0.5, math.pi * 1.5), 0) * CFrame.new(0, 0, -r * 0.57 * w) * CFrame.Angles(0, 0, math.rad(rng:NextNumber(-20, 20))),
+		Color = look.glow,
+		Material = Enum.Material.Neon,
+	}))
 
 	-- Шляпка чуть наклонена в случайную сторону.
 	local capH = h * rng:NextNumber(0.42, 0.55)
@@ -143,6 +180,20 @@ function Models.creep(zone: number, size: number, mutation: number, cf: CFrame):
 	local tilt = math.rad(rng:NextNumber(0, V.CapTilt))
 	local capCf = bottom * CFrame.new(0, capY, 0) * CFrame.Angles(0, rng:NextNumber(0, math.pi * 2), 0) * CFrame.Angles(tilt, 0, 0)
 	add(blob("Gills", Vector3.new(capR * 1.85, capH * 0.3, capR * 1.85), capCf * CFrame.new(0, -capH * 0.08, 0), look.cap:Lerp(look.body, 0.5):Lerp(Color3.new(0, 0, 0), 0.25), look.material))
+	-- Пластинки под шляпкой расходятся от ножки к краю.
+	local gillColor = look.cap:Lerp(look.body, 0.5):Lerp(Color3.new(0, 0, 0), 0.4)
+	local plates = V.GillPlates + 2 * size
+	for i = 1, plates do
+		add(part({
+			Name = "Gill",
+			Size = Vector3.new(capR * 0.8, capH * 0.16, 0.06),
+			CFrame = capCf * CFrame.Angles(0, i / plates * math.pi * 2, 0) * CFrame.new(capR * 0.55, -capH * 0.12, 0),
+			Color = gillColor,
+			Material = look.material,
+		}))
+	end
+	-- Ободок: край шляпки толще и темнее.
+	add(blob("Rim", Vector3.new(capR * 2.06, capH * 0.26, capR * 2.06), capCf * CFrame.new(0, -capH * 0.1, 0), look.cap:Lerp(Color3.new(0, 0, 0), 0.2), look.material))
 	local cap = solid(blob("Cap", Vector3.new(capR * 2, capH, capR * 2), capCf, look.cap, look.material))
 
 	-- Точка на поверхности шляпки: k — доля радиуса от центра, a — угол.
@@ -170,6 +221,26 @@ function Models.creep(zone: number, size: number, mutation: number, cf: CFrame):
 		}))
 	end
 
+	-- Кристаллы прорастают у края шляпки гнёздами по 2: короткие, толстые, наклонены наружу,
+	-- бледнее трещин — чтобы не торчали «антеннами».
+	local crystalColor = look.glow:Lerp(Color3.new(1, 1, 1), 0.55)
+	for _ = 1, V.Crystals + size - 1 do
+		local base = onCap(rng:NextNumber(0, math.pi * 2), rng:NextNumber(0.6, 0.82), 0)
+		for j = 1, 2 do
+			local len = r * (if j == 1 then rng:NextNumber(0.32, 0.45) else rng:NextNumber(0.18, 0.26))
+			local thick = len * 0.5
+			local at = base * CFrame.new(0, 0, (j - 1.5) * thick * 1.1) * CFrame.Angles(math.rad(rng:NextNumber(-15, 15)), rng:NextNumber(0, math.pi), math.rad(-rng:NextNumber(15, 35)))
+			add(part({
+				Name = "Crystal",
+				Size = Vector3.new(thick, len, thick),
+				CFrame = at * CFrame.new(0, len * 0.3, 0) * CFrame.Angles(0, math.rad(45), 0),
+				Color = crystalColor,
+				Material = Enum.Material.Glass,
+				Transparency = 0.25,
+			}))
+		end
+	end
+
 	-- Ростки вокруг Крупного.
 	if size == 3 then
 		for _ = 1, rng:NextInteger(2, 4) do
@@ -187,8 +258,8 @@ function Models.creep(zone: number, size: number, mutation: number, cf: CFrame):
 		sparkles.Parent = cap
 		local light = Instance.new("PointLight")
 		light.Color = look.glow
-		light.Range = r * 4 + 6
-		light.Brightness = 1 + mutation * 0.6
+		light.Range = r * 3 + 4
+		light.Brightness = 0.6 + mutation * 0.35 -- ярче слепит, особенно на золоте
 		light.Parent = cap
 	end
 	if mutation == 4 then
