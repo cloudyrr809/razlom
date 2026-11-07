@@ -27,6 +27,7 @@ local killFx = Remotes:WaitForChild("KillFx") :: RemoteEvent
 local CreepFx = {}
 local player = Players.LocalPlayer
 
+type Scaled = { mesh: SpecialMesh, base: Vector3 }
 type View = {
 	model: Model,
 	root: BasePart,
@@ -37,8 +38,23 @@ type View = {
 	title: TextLabel,
 	lastHit: number,
 	glowing: { BasePart },
-	body: SpecialMesh?,
-	cap: SpecialMesh?,
+	-- Меши, которые сплющиваются вместе с ножкой / шляпкой; base — их исходный масштаб.
+	bodyMeshes: { Scaled },
+	capMeshes: { Scaled },
+	sheens: { BasePart },
+	sheenColor: Color3,
+	-- Глаза: зрачок и блик двигаются мешем (Offset), глаз моргает масштабом.
+	pupils: { { part: BasePart, mesh: SpecialMesh } },
+	eyeMeshes: { Scaled },
+	gaze: Vector2, -- текущее положение зрачков, −1..1
+	gazeJitter: Vector2, -- мелкий «бег» глаз, меняется рывками
+	nextJitter: number,
+	nextBlink: number,
+	blinkAt: number,
+	lastT: number,
+	dist: number,
+	live: boolean, -- анимируется сейчас (один из ближайших)
+	pupilRange: Vector2, -- насколько далеко зрачок уходит от центра, стады
 	phase: number,
 	squashUntil: number,
 	mutation: number,
@@ -50,6 +66,7 @@ type View = {
 	predictedAt: number,
 }
 local views: { [number]: View } = {}
+local L = Config.CreepLife
 
 local SOUND_HIT = "rbxasset://sounds/swordslash.wav"
 local SOUND_CRIT = "rbxasset://sounds/electronicpingshort.wav"
@@ -107,12 +124,6 @@ CreepFx.playSound = playSound
 local function num(model: Instance, name: string): number
 	local v = model:GetAttribute(name)
 	return if type(v) == "number" then v else 0
-end
-
-local function meshOf(model: Model, name: string): SpecialMesh?
-	local p = model:FindFirstChild(name)
-	local m = p and p:FindFirstChildOfClass("SpecialMesh")
-	return m
 end
 
 local function bind(model: Instance)
@@ -195,9 +206,35 @@ local function bind(model: Instance)
 	gui.Parent = root
 
 	local glowing = {}
+	local bodyMeshes: { Scaled }, capMeshes: { Scaled }, eyeMeshes: { Scaled } = {}, {}, {}
+	local sheens: { BasePart } = {}
+	local pupils: { { part: BasePart, mesh: SpecialMesh } } = {}
+	local sheenColor = Color3.new(1, 1, 1)
 	for _, d in model:GetChildren() do
-		if d:IsA("BasePart") and (d.Name == "Crack" or d.Name == "Eye") then
+		if not d:IsA("BasePart") then
+			continue
+		end
+		if d.Name == "Crack" or d.Name == "Eye" then
 			table.insert(glowing, d)
+		end
+		if d.Name == "Sheen" or d.Name == "SheenBody" then
+			table.insert(sheens, d)
+			sheenColor = d.Color
+		end
+		local mesh = d:FindFirstChildOfClass("SpecialMesh")
+		if not mesh then
+			continue
+		end
+		local entry = { mesh = mesh, base = mesh.Scale }
+		if d.Name == "Cap" or d.Name == "Sheen" or d.Name == "CapPart" then
+			table.insert(capMeshes, entry)
+		elseif d.Name == "Body" or d.Name == "SheenBody" or d.Name == "BodyPart" then
+			table.insert(bodyMeshes, entry)
+		elseif d.Name == "Pupil" or d.Name == "Glint" then
+			table.insert(pupils, { part = d, mesh = mesh })
+			table.insert(eyeMeshes, entry)
+		elseif d.Name == "Eye" then
+			table.insert(eyeMeshes, entry)
 		end
 	end
 
@@ -211,8 +248,21 @@ local function bind(model: Instance)
 		title = title,
 		lastHit = 0,
 		glowing = glowing,
-		body = meshOf(model, "Body"),
-		cap = meshOf(model, "Cap"),
+		bodyMeshes = bodyMeshes,
+		capMeshes = capMeshes,
+		sheens = sheens,
+		sheenColor = sheenColor,
+		pupils = pupils,
+		eyeMeshes = eyeMeshes,
+		gaze = Vector2.zero,
+		gazeJitter = Vector2.zero,
+		nextJitter = 0,
+		nextBlink = os.clock() + math.random() * Config.CreepLife.BlinkMax,
+		blinkAt = -math.huge,
+		lastT = os.clock(),
+		dist = math.huge,
+		live = false,
+		pupilRange = Vector2.new(s.radius * Config.CreepLife.PupilRangeX, s.radius * Config.CreepLife.PupilRangeY),
 		phase = math.random() * 10,
 		squashUntil = 0,
 		mutation = mutation,
@@ -247,51 +297,106 @@ local function bind(model: Instance)
 	end)
 end
 
-local function updateView(v: View, t: number)
+local function setScale(list: { Scaled }, k: Vector3)
+	for _, e in list do
+		e.mesh.Scale = e.base * k
+	end
+end
+
+-- Полоска и надписи: пишем в интерфейс, только когда он виден.
+local function updateGui(v: View, t: number)
 	local hp, maxHp = num(v.model, "Hp"), math.max(num(v.model, "MaxHp"), 0.001)
 	local frac = math.clamp(hp / maxHp, 0, 1)
+	local regen = Formulas.regenPerSecond(maxHp)
+	local dps = Store.dps()
+	local locked = dps <= regen
+	local inCombat = t - v.lastHit < 3
+	local show = inCombat or frac < 0.999 or (locked and v.dist < 28) or (v.mutation > 0 and v.dist < 45)
+	v.gui.Enabled = show
+	if not show then
+		return
+	end
 	v.fill.Size = UDim2.fromScale(frac, 1)
 	-- Зелёная полоска — сколько крип откатит за ближайшую секунду.
 	v.regen.Size = UDim2.fromScale(math.clamp(frac + Config.Creeps.RegenPerSecond, 0, 1), 1)
 	v.regen.Visible = frac < 1
-
-	local dist = World.distanceTo(v.root.Position)
-	local regen = Formulas.regenPerSecond(maxHp)
-	local dps = Store.dps()
-	local locked = dps <= regen
 	v.lock.Visible = locked
 	v.title.Visible = not locked and v.mutation > 0
 	if locked then
 		v.lock.Text = `🔒 до пробоя {math.floor(dps / regen * 100)}%`
 	end
-	local inCombat = t - v.lastHit < 3
-	v.gui.Enabled = inCombat or frac < 0.999 or (locked and dist < 28) or (v.mutation > 0 and dist < 45)
+end
 
-	-- «Дыхание» и сплющивание от удара — через масштаб мешей.
+-- Возвращает крипа в покой, когда он перестал быть «живым» (ушёл из ближайших).
+local function rest(v: View)
+	setScale(v.bodyMeshes, Vector3.one)
+	setScale(v.capMeshes, Vector3.one)
+	setScale(v.eyeMeshes, Vector3.one)
+	for _, p in v.pupils do
+		p.mesh.Offset = Vector3.zero
+	end
+	for _, g in v.glowing do
+		g.Transparency = 0
+	end
+	for _, p in v.sheens do
+		p.Color = v.sheenColor
+	end
+end
+
+-- Жизнь ближнего крипа: дыхание, сплющивание от удара, взгляд, моргание, мерцание.
+local function animate(v: View, t: number, me: BasePart?)
+	local dt = math.min(t - v.lastT, 0.1)
+	v.lastT = t
 	local breathe = math.sin(t * 2.2 + v.phase) * 0.035
 	local squash = 0
 	if t < v.squashUntil then
 		local k = 1 - (v.squashUntil - t) / SQUASH_TIME
 		squash = if k > 0 then math.sin(k * math.pi) * 0.28 else 0 -- до этого — хит-стоп
 	end
-	if v.body then
-		v.body.Scale = Vector3.new(1 + squash * 0.6, 1 + breathe - squash, 1 + squash * 0.6)
-	end
-	if v.cap then
-		v.cap.Scale = Vector3.new(1 + squash * 0.5 - breathe * 0.5, 1 - squash * 0.7, 1 + squash * 0.5 - breathe * 0.5)
-	end
-	-- Отшатывается от удара, качнувшись от земли: крипы стоят на месте, сервер их не двигает.
-	if v.recoilStart > -math.huge then
-		local rk = (t - v.recoilStart) / Config.Juice.RecoilTime
-		if rk < 1 then
-			local ang = v.recoilAngle * math.sin(rk * math.pi) * (1 - rk) * 2
-			local foot = v.basePivot.Position - Vector3.new(0, v.height / 2, 0)
-			v.model:PivotTo(CFrame.new(foot) * CFrame.fromAxisAngle(v.recoilAxis, ang) * CFrame.new(-foot) * v.basePivot)
-		else
-			v.recoilStart = -math.huge
-			v.model:PivotTo(v.basePivot)
+	setScale(v.bodyMeshes, Vector3.new(1 + squash * 0.6, 1 + breathe - squash, 1 + squash * 0.6))
+	setScale(v.capMeshes, Vector3.new(1 + squash * 0.5 - breathe * 0.5, 1 - squash * 0.7, 1 + squash * 0.5 - breathe * 0.5))
+
+	-- Плёнка переливается: оттенок плавно гуляет, у Призматического — по всей радуге.
+	if #v.sheens > 0 then
+		local hue, sat, val = v.sheenColor:ToHSV()
+		local shifted = if v.mutation == 3
+			then Color3.fromHSV((t * 0.15 + v.phase) % 1, 0.55, 1)
+			else Color3.fromHSV((hue + math.sin(t * 0.9 + v.phase) * Config.CreepLooks.SheenHueShift) % 1, sat, val)
+		for _, p in v.sheens do
+			p.Color = shifted
 		end
 	end
+
+	-- Зрачки: на игрока, а без игрока — бродят. Поверх — мелкие рывки, как у живых глаз.
+	local target = if me and v.dist < L.LookRange then me.Position + Vector3.new(0, 1.5, 0) else nil
+	if t >= v.nextJitter then
+		v.nextJitter = t + L.JitterMin + math.random() * (L.JitterMax - L.JitterMin)
+		local spread = if target then L.Jitter else 0.9
+		v.gazeJitter = Vector2.new((math.random() * 2 - 1) * spread, (math.random() * 2 - 1) * spread * 0.6)
+	end
+	local aim = Vector2.zero
+	local first = v.pupils[1]
+	if target and first then
+		local d = first.part.CFrame:VectorToObjectSpace(target - first.part.Position)
+		local flat = math.max(-d.Z, 0.001)
+		aim = Vector2.new(math.clamp(d.X / flat, -1, 1), math.clamp(d.Y / flat, -1, 1))
+	end
+	local goal = aim + v.gazeJitter
+	goal = Vector2.new(math.clamp(goal.X, -1, 1), math.clamp(goal.Y, -1, 1))
+	v.gaze = v.gaze:Lerp(goal, math.min(1, dt * L.GazeSpeed))
+	local offset = Vector3.new(v.gaze.X * v.pupilRange.X, v.gaze.Y * v.pupilRange.Y, 0)
+	for _, p in v.pupils do
+		p.mesh.Offset = offset
+	end
+
+	-- Моргание: глаз сжимается по высоте и раскрывается.
+	if t >= v.nextBlink then
+		v.blinkAt = t
+		v.nextBlink = t + L.BlinkMin + math.random() * (L.BlinkMax - L.BlinkMin)
+	end
+	local bk = (t - v.blinkAt) / L.BlinkTime
+	setScale(v.eyeMeshes, Vector3.new(1, if bk < 1 then 1 - math.sin(bk * math.pi) * 0.9 else 1, 1))
+
 	-- Трещины и глаза мерцают; Призматический переливается.
 	local pulse = 0.5 + math.sin(t * 3 + v.phase) * 0.5
 	for _, g in v.glowing do
@@ -299,6 +404,56 @@ local function updateView(v: View, t: number)
 		if v.mutation == 3 then
 			g.Color = Color3.fromHSV((t * 0.3 + v.phase) % 1, 0.6, 1)
 		end
+	end
+end
+
+-- Отшатывается от удара, качнувшись от земли: крипы стоят на месте, сервер их не двигает.
+local function recoil(v: View, t: number)
+	if v.recoilStart == -math.huge then
+		return
+	end
+	local rk = (t - v.recoilStart) / Config.Juice.RecoilTime
+	if rk < 1 then
+		local ang = v.recoilAngle * math.sin(rk * math.pi) * (1 - rk) * 2
+		local foot = v.basePivot.Position - Vector3.new(0, v.height / 2, 0)
+		v.model:PivotTo(CFrame.new(foot) * CFrame.fromAxisAngle(v.recoilAxis, ang) * CFrame.new(-foot) * v.basePivot)
+	else
+		v.recoilStart = -math.huge
+		v.model:PivotTo(v.basePivot)
+	end
+end
+
+-- Каждый кадр: полоски — у всех, «жизнь» — только у нескольких ближайших,
+-- остальные стоят неподвижно и ничего не тратят.
+local liveList: { View } = {}
+local function updateAll(t: number)
+	local me = World.root()
+	table.clear(liveList)
+	for _, v in views do
+		v.dist = World.distanceTo(v.root.Position)
+		updateGui(v, t)
+		recoil(v, t)
+		if v.dist < L.LiveRange then
+			table.insert(liveList, v)
+		end
+	end
+	table.sort(liveList, function(a, b)
+		return a.dist < b.dist
+	end)
+	for i = L.LiveCount + 1, #liveList do
+		liveList[i] = nil
+	end
+	for _, v in views do
+		local live = table.find(liveList, v) ~= nil
+		if live then
+			if not v.live then
+				v.lastT = t
+			end
+			animate(v, t, me)
+		elseif v.live then
+			rest(v)
+		end
+		v.live = live
 	end
 end
 
@@ -451,6 +606,7 @@ local function react(v: View, from: Vector3?)
 	local u = away.Unit
 	v.recoilAxis = Vector3.new(u.Z, 0, -u.X)
 	v.recoilStart = t
+	v.blinkAt = t -- от удара жмурится
 end
 
 -- Свой удар: крип реагирует сразу (звук, вспышка, отшатывание), урон придёт с сервера.
@@ -544,9 +700,7 @@ function CreepFx.start()
 	killFx.OnClientEvent:Connect(onKill)
 	RunService.RenderStepped:Connect(function()
 		local t = os.clock()
-		for _, v in views do
-			updateView(v, t)
-		end
+		updateAll(t)
 		if t < shakeUntil then
 			local camera = Workspace.CurrentCamera
 			if camera then
