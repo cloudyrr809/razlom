@@ -696,6 +696,18 @@ function CreepFx.start()
 		task.spawn(bind, m)
 	end
 	CreepFx.preload({ SOUND_HIT, SOUND_CRIT })
+	-- Меши и текстуры крипов — сразу при входе, а не когда движок сам до них доберётся.
+	task.spawn(function()
+		local ids = {}
+		for _, name in { "Stem", "StemGlow", "Cap", "CapGlow" } do
+			local m = Config.CreepMeshes[name]
+			table.insert(ids, m.id)
+			if m.tex ~= "" then
+				table.insert(ids, m.tex)
+			end
+		end
+		ContentProvider:PreloadAsync(ids)
+	end)
 	hitFx.OnClientEvent:Connect(onHit)
 	killFx.OnClientEvent:Connect(onKill)
 	RunService.RenderStepped:Connect(function()

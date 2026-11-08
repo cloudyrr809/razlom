@@ -254,8 +254,14 @@ function Arsenal.start()
 			if old then
 				old:Destroy()
 			end
-			for k, part in info.pedestals do
-				part.Transparency = if k <= Config.Monolith.BasePedestals then 0 else 0.7
+			-- Свободная база — все постаменты погашены, чтобы не путать с чужими.
+			for _, part in info.pedestals do
+				part.Transparency = 0.7
+				local top = part:FindFirstChild("Top")
+				if top and top:IsA("BasePart") then
+					top.Transparency = 0.85
+					top.Color = Color3.fromRGB(110, 140, 170)
+				end
 			end
 		end
 	end)

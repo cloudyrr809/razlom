@@ -55,6 +55,7 @@ local function block(parent, props)
 end
 
 local function deco(parent, props)
+	props.CastShadow = false -- декор не бросает тени: иначе на песке пятна от парящих деталей
 	props.CanCollide = false
 	props.CanQuery = false
 	props.CanTouch = false
@@ -390,6 +391,7 @@ terrain:SetMaterialColor(Enum.Material.Limestone, Palette.Zones[2].sandDark)
 terrain:SetMaterialColor(Enum.Material.Rock, Color3.fromRGB(150, 140, 128))
 terrain:SetMaterialColor(Enum.Material.Ground, Color3.fromRGB(176, 128, 90))
 terrain:SetMaterialColor(Enum.Material.Mud, Color3.fromRGB(128, 74, 52))
+terrain:SetMaterialColor(Enum.Material.Basalt, Color3.fromRGB(58, 56, 72)) -- стенки разломов
 
 local MIN_X, MAX_X, MAX_Z = -170, Config.Zones[#Config.Zones].xEnd + 40, 175
 local zone2x = Config.Zones[2].xStart
@@ -467,6 +469,192 @@ local function campEdge(x, z)
 	return best
 end
 
+-- Базы и разломы: заранее, чтобы рельеф прорезал под них траншеи. -------------------
+-- Базы стоят на дуге вокруг входа, «вперёд» каждой — на вход: путь у всех одинаковый.
+local BR, BTOP = W.BaseRadius, W.BaseHeight
+local HUB = W.HubRadius
+local PED_R, MOAT_R = 9, 6.9 -- кольцо постаментов и светящийся ров вокруг Монолита
+local glowBlue = Palette.Zones[1].glow
+local baseList = {}
+for index = 1, Config.Base.Count do
+	local deg = W.BaseArcFrom + (W.BaseArcTo - W.BaseArcFrom) * (index - 1) / (Config.Base.Count - 1)
+	local a = math.rad(deg)
+	local center = G + Vector3.new(math.cos(a), 0, math.sin(a)) * W.BaseRingRadius
+	local top = Vector3.new(center.X, BTOP, center.Z)
+	table.insert(baseList, {
+		index = index,
+		deg = deg,
+		center = center,
+		top = top,
+		frame = CFrame.lookAt(top, Vector3.new(G.X, BTOP, G.Z)),
+	})
+end
+-- Направление в рамке базы: угол 0 — вперёд (на вход), растёт против часовой.
+local function baseDir(frame, deg)
+	local r = math.rad(deg)
+	return frame:VectorToWorldSpace(Vector3.new(-math.sin(r), 0, -math.cos(r)))
+end
+
+-- Ломаная разлома: от точки, примерно по направлению, с шагом step; ширина и глубина плавно меняются.
+-- maxDev — насколько далеко курс может уйти от исходного (градусы).
+local function riftLine(from, dir, length, w0, w1, d0, d1, maxDev)
+	local pts = { { p = from, w = w0, d = d0 } }
+	local base = dir.Unit
+	local heading = base
+	local p, gone = from, 0
+	while gone < length do
+		local step = math.min(length - gone, rng:NextNumber(1.8, 3))
+		local turned = CFrame.Angles(0, math.rad(rng:NextNumber(-28, 28)), 0):VectorToWorldSpace(heading)
+		-- Не даём уйти вбок дальше maxDev.
+		local dev = math.deg(math.acos(math.clamp(turned:Dot(base), -1, 1)))
+		if dev <= maxDev then
+			heading = turned.Unit
+		end
+		p += heading * step
+		gone += step
+		local t = gone / length
+		table.insert(pts, { p = p, w = w0 + (w1 - w0) * t, d = d0 + (d1 - d0) * t })
+	end
+	return pts
+end
+
+-- Траншеи в рельефе: { pts, minX, maxX, minZ, maxZ }. Полуширина в рельефе шире самой трещины:
+-- воксель рельефа 4 стада, узкая щель в нём просто не прорежется.
+local trenches = {}
+local function trenchHalf(w)
+	return w * 0.9 + 1.6
+end
+local function addTrench(pts)
+	local t = { pts = pts, minX = math.huge, maxX = -math.huge, minZ = math.huge, maxZ = -math.huge }
+	for _, q in pts do
+		local m = trenchHalf(q.w) + 1
+		t.minX, t.maxX = math.min(t.minX, q.p.X - m), math.max(t.maxX, q.p.X + m)
+		t.minZ, t.maxZ = math.min(t.minZ, q.p.Z - m), math.max(t.maxZ, q.p.Z + m)
+	end
+	table.insert(trenches, t)
+end
+-- Глубина траншеи в точке (0 — траншеи нет). Профиль — V: глубже всего по оси.
+local function trenchDepth(x, z)
+	local best = 0
+	for _, t in trenches do
+		if x >= t.minX and x <= t.maxX and z >= t.minZ and z <= t.maxZ then
+			local pts = t.pts
+			for i = 1, #pts - 1 do
+				local a, b = pts[i], pts[i + 1]
+				local abx, abz = b.p.X - a.p.X, b.p.Z - a.p.Z
+				local len2 = abx * abx + abz * abz
+				local k = math.clamp(((x - a.p.X) * abx + (z - a.p.Z) * abz) / len2, 0, 1)
+				local dx, dz = x - (a.p.X + abx * k), z - (a.p.Z + abz * k)
+				local dist = math.sqrt(dx * dx + dz * dz)
+				local hw = trenchHalf(a.w + (b.w - a.w) * k)
+				if dist < hw then
+					local dep = (a.d + (b.d - a.d) * k) * (1 - (dist / hw) ^ 2)
+					if dep > best then
+						best = dep
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
+-- У каждой базы три разлома уходят назад, между постаментами, ломают край плиты и
+-- продолжаются в песок. Спереди (к входу) плита целая — бежать ничего не мешает.
+for _, b in baseList do
+	b.cuts = {} -- вырезы в плите: { a, b, w, d }
+	b.riftsOut = {} -- продолжения в рельефе (для жил и крышек)
+	for i, deg in { 144, 180, 216 } do
+		local dir = baseDir(b.frame, deg + rng:NextNumber(-4, 4))
+		local start = b.top + dir * (MOAT_R + 0.3)
+		-- Внутри плиты курс почти прямой: трещина идёт между постаментами.
+		local inner = riftLine(start, dir, BR - MOAT_R + 0.2, 0.9, 1.9, 2.6, 4.2, 9)
+		for k = 1, #inner - 1 do
+			table.insert(b.cuts, { a = inner[k].p, b = inner[k + 1].p, w = inner[k].w, w2 = inner[k + 1].w, d = inner[k].d, lid = true })
+		end
+		-- Дальше — в песок, шире разбег.
+		local last = inner[#inner]
+		local outLen = rng:NextNumber(9, 15) * (if i == 2 then 1.25 else 1)
+		local outer = riftLine(last.p, (last.p - inner[#inner - 1].p), outLen, 1.9, 0.8, 5.5, 1.6, 35)
+		-- Рельеф прорезаем и под краем плиты (там песок ещё до верха), поэтому — с частью внутренней линии.
+		local trench = {}
+		for k = math.max(1, #inner - 2), #inner do
+			table.insert(trench, { p = inner[k].p, w = inner[k].w, d = 5.5 })
+		end
+		for k = 2, #outer do
+			table.insert(trench, outer[k])
+		end
+		addTrench(trench)
+		table.insert(b.riftsOut, outer)
+		-- У среднего — ответвление.
+		if i == 2 then
+			local mid = outer[math.max(2, #outer // 2)]
+			local side = if rng:NextNumber() < 0.5 then -1 else 1
+			local bdir = CFrame.Angles(0, math.rad(side * rng:NextNumber(35, 55)), 0):VectorToWorldSpace(dir)
+			local branch = riftLine(mid.p, bdir, rng:NextNumber(5, 8), mid.w * 0.8, 0.7, mid.d * 0.8, 1.4, 30)
+			addTrench(branch)
+			table.insert(b.riftsOut, branch)
+		end
+	end
+	-- Тонкие трещинки ото рва к бокам — неглубокие, нога в них не проваливается.
+	for _, deg in { 36, 108, 252, 324 } do
+		local dir = baseDir(b.frame, deg + rng:NextNumber(-5, 5))
+		local line = riftLine(b.top + dir * (MOAT_R + 0.2), dir, rng:NextNumber(2.5, 3.6), 0.65, 0.25, 1.8, 1.2, 12)
+		for k = 1, #line - 1 do
+			table.insert(b.cuts, { a = line[k].p, b = line[k + 1].p, w = line[k].w, w2 = line[k + 1].w, d = line[k].d, lid = false })
+		end
+	end
+end
+
+-- Площадь у входа: между дорожками от баз — короткие разломы с кристаллами.
+local hubRifts = {}
+do
+	local n = Config.Base.Count
+	local stepDeg = (W.BaseArcTo - W.BaseArcFrom) / (n - 1)
+	for i = 1, n - 1 do
+		local deg = W.BaseArcFrom + stepDeg * (i - 0.5)
+		local dir = Vector3.new(math.cos(math.rad(deg)), 0, math.sin(math.rad(deg)))
+		local line = riftLine(G + dir * 12.5, dir, rng:NextNumber(8, 9.5), 0.6, 0.4, 2.5, 1, 7)
+		-- Посередине шире и глубже: «глаз» разлома.
+		local cuts = {}
+		for k, q in line do
+			local t = (k - 1) / (#line - 1)
+			q.w = 0.35 + 1.0 * math.sin(t * math.pi)
+			q.d = 1 + 2.6 * math.sin(t * math.pi)
+		end
+		for k = 1, #line - 1 do
+			table.insert(cuts, { a = line[k].p, b = line[k + 1].p, w = line[k].w, w2 = line[k + 1].w, d = line[k].d, lid = true })
+		end
+		table.insert(hubRifts, { cuts = cuts, dir = dir })
+	end
+end
+
+-- Расстояние до ближайшей плиты базы (минус её радиус) и до ближайшей дорожки к входу.
+local function plateEdge(x, z)
+	-- Площадь у входа — полукруг (по эту сторону от входа).
+	local best = math.max(math.sqrt((x - G.X) ^ 2 + (z - G.Z) ^ 2) - HUB, x - (G.X + 2))
+	for _, b in baseList do
+		local d = math.sqrt((x - b.center.X) ^ 2 + (z - b.center.Z) ^ 2) - BR
+		if d < best then
+			best = d
+		end
+	end
+	return best
+end
+local function laneDist(x, z)
+	local best = math.huge
+	for _, b in baseList do
+		local ax, az = b.center.X, b.center.Z
+		local abx, abz = G.X - ax, G.Z - az
+		local k = math.clamp(((x - ax) * abx + (z - az) * abz) / (abx * abx + abz * abz), 0, 1)
+		local d = math.sqrt((x - ax - abx * k) ^ 2 + (z - az - abz * k) ^ 2)
+		if d < best then
+			best = d
+		end
+	end
+	return best
+end
+
 -- Плоская площадка баз и арены: круг вокруг входа, только по эту сторону от него.
 local function basesEdge(x, z)
 	local disc = math.sqrt((x - G.X) ^ 2 + z * z) - (W.BaseRingRadius + W.BaseRadius + 14)
@@ -500,6 +688,23 @@ local function ground(x, z)
 	-- Мелкая рябь, кроме площадок.
 	h += math.noise(x / 7, z / 7, 9.9) * 0.8 * smooth(0, 4, d)
 	h = math.clamp(h, 0, 60)
+
+	-- Под плитой базы — пустота (в плите вырезаны трещины, песок не должен их засыпать).
+	-- Только там, где клетка вокселя целиком под плитой, иначе у края плиты будет щель.
+	local dPlate = plateEdge(x, z)
+	if dPlate < -2.9 then
+		return -10, Enum.Material.Slate
+	end
+	-- Разломы режут рельеф вниз.
+	local dig = trenchDepth(x, z)
+	if dig > 0.3 then
+		return h - dig, Enum.Material.Basalt
+	end
+
+	-- Песок вокруг плиты чуть приподнят до её верха: края плиты не видно, ступеньки нет.
+	if dPlate < 1.5 then
+		return BTOP - 0.03, Enum.Material.Sand
+	end
 
 	local mat
 	if onPath then
@@ -789,173 +994,336 @@ for _, w in {
 end
 task.wait()
 
--- Спавн: круглая арена со ступенями и светящимися кольцами ----------------------
-do
-	local plaza = Instance.new("Model")
-	plaza.Name = "Plaza"
-	local c = W.PlazaCenter
-	local R = W.PlazaRadius
-	local stone = Color3.fromRGB(214, 190, 150)
-	block(plaza, {
-		Name = "Floor",
-		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(1, R * 2, R * 2),
-		CFrame = CFrame.new(c.X, -0.45, c.Z) * CFrame.Angles(0, 0, math.rad(90)),
-		Color = stone,
-		Material = Enum.Material.Sandstone,
-	})
-	-- Ступени-кольца по краю (как трибуны).
-	for i = 1, 3 do
-		local r = R + i * 2.5
-		local n = 40
-		for k = 0, n - 1 do
-			local a = k / n * math.pi * 2
-			-- Проход к дороге и к базам оставляем открытым.
-			local dir = Vector3.new(math.cos(a), 0, math.sin(a))
-			local toRoad = dir.X > 0.85
-			if not toRoad then
-				block(plaza, {
-					Name = "Step",
-					Size = Vector3.new(2.6, i * 0.9, r * 2 * math.pi / n + 0.4),
-					CFrame = CFrame.new(c + dir * r + Vector3.new(0, i * 0.45 - 0.1, 0)) * CFrame.Angles(0, -a, 0),
-					Color = stone:Lerp(Color3.fromRGB(170, 140, 100), i * 0.15),
-					Material = Enum.Material.Sandstone,
+-- Разломы: светящаяся жила на дне и невидимая крышка поверху, чтобы не проваливаться.
+-- veinY(глубина) — высота жилы; lidY — верх крышки; lidHalf(ширина) — полуширина крышки.
+local terrainOnly = RaycastParams.new()
+terrainOnly.FilterType = Enum.RaycastFilterType.Include
+terrainOnly.FilterDescendantsInstances = { terrain }
+-- Высота видимой поверхности рельефа (воксели сглажены — считаем лучом, а не формулой).
+local function surfaceY(x, z)
+	local hit = workspace:Raycast(Vector3.new(x, 30, z), Vector3.new(0, -60, 0), terrainOnly)
+	return if hit then hit.Position.Y else 0
+end
+local function riftFill(parent, pts, lidY, lidHalf)
+	local veins = {}
+	for k = 1, #pts - 1 do
+		local a, b = pts[k], pts[k + 1]
+		local pa, pb = Vector3.new(a.p.X, 0, a.p.Z), Vector3.new(b.p.X, 0, b.p.Z)
+		local len = (pb - pa).Magnitude
+		if len > 0.05 then
+			local mid = (pa + pb) / 2
+			local w = (a.w + b.w) / 2
+			-- Жила лежит на дне, где рельеф правда прорезался; мелкие места пропускаем.
+			local y = surfaceY(mid.X, mid.Z)
+			if y > -0.7 then
+				continue
+			end
+			y -= 0.15
+			table.insert(
+				veins,
+				glow(deco(parent, {
+					Name = "Vein",
+					Size = Vector3.new(math.max(0.3, w * 0.4), 0.6, len + 0.3),
+					CFrame = CFrame.lookAt(mid + Vector3.new(0, y, 0), pb + Vector3.new(0, y, 0)),
+					Color = glowBlue,
+					Material = Enum.Material.Neon,
+				}))
+			)
+			block(parent, {
+				Name = "RiftLid",
+				Size = Vector3.new(lidHalf(w) * 2, 0.5, len + 0.6),
+				CFrame = CFrame.lookAt(mid + Vector3.new(0, lidY - 0.25, 0), pb + Vector3.new(0, lidY - 0.25, 0)),
+				Transparency = 1,
+				CanQuery = false,
+				CanTouch = false,
+			})
+		end
+	end
+	local core = veins[math.max(1, #veins // 2)]
+	if core then
+		local light = Instance.new("PointLight")
+		light.Color = glowBlue
+		light.Range = 12
+		light.Brightness = 2
+		light.Shadows = false
+		light.Parent = core
+	end
+end
+
+-- Каменные плиты (базы и площадь у входа): цилиндр, из которого вычтены трещины, ров и сколы
+-- по краю (CSG, GeometryService). Трещины настоящие — с глубиной, скошенными краями и стенками.
+local PLATE = Color3.fromRGB(150, 142, 140)
+local HUB_STONE = Color3.fromRGB(184, 164, 136)
+
+-- Вырезы трещин: щель со слегка наклонными стенками и «ромб» сверху — скошенные края.
+local function crackCutters(cuts, add)
+	for _, c in cuts do
+		local a, e = Vector3.new(c.a.X, BTOP, c.a.Z), Vector3.new(c.b.X, BTOP, c.b.Z)
+		local len = (e - a).Magnitude
+		if len > 0.05 then
+			local w = (c.w + c.w2) / 2
+			local cf = CFrame.lookAt((a + e) / 2, e)
+			add(Vector3.new(w, c.d * 2, len + w * 0.7), cf * CFrame.Angles(0, 0, math.rad(rng:NextNumber(-10, 10))))
+			add(Vector3.new(w * 1.2, w * 1.2, len + w * 0.3), cf * CFrame.Angles(0, 0, math.rad(45)))
+		end
+	end
+end
+
+-- Скол края плиты в точке.
+local function chipCutter(at, add)
+	add(
+		Vector3.new(rng:NextNumber(1.6, 3), 2, rng:NextNumber(1.2, 2.4)),
+		CFrame.new(at) * CFrame.Angles(math.rad(rng:NextNumber(-25, 25)), rng:NextNumber(0, math.pi), math.rad(rng:NextNumber(-25, 25)))
+	)
+end
+
+-- Плита: цилиндр радиуса radius в center, толщиной 8, верх на BTOP. fill(add) добавляет вырезы.
+local function carvedPlate(center, radius, color, material, fill)
+	local slab = Instance.new("Part")
+	slab.Anchored = true
+	slab.Shape = Enum.PartType.Cylinder
+	slab.Size = Vector3.new(8, radius * 2, radius * 2)
+	slab.CFrame = CFrame.new(center.X, BTOP - 4, center.Z) * CFrame.Angles(0, 0, math.rad(90))
+	slab.Parent = workspace -- вычитание работает с деталями в мире
+	local cutters = {}
+	fill(function(size, cf, shape)
+		local p = Instance.new("Part")
+		p.Anchored = true
+		if shape then
+			p.Shape = shape
+		end
+		p.Size = size
+		p.CFrame = cf
+		p.Parent = workspace
+		table.insert(cutters, p)
+	end)
+	local ok, res = pcall(function()
+		return game:GetService("GeometryService"):SubtractAsync(slab, cutters, {
+			CollisionFidelity = Enum.CollisionFidelity.PreciseConvexDecomposition,
+			RenderFidelity = Enum.RenderFidelity.Precise,
+			SplitApart = false,
+		})
+	end)
+	for _, p in cutters do
+		p:Destroy()
+	end
+	local floor = slab
+	if ok and res[1] then
+		floor = res[1]
+		slab:Destroy()
+		floor.UsePartColor = true
+	else
+		warn("Плита без вырезов:", res)
+	end
+	floor.Name = "Floor"
+	floor.Anchored = true
+	floor.Color = color
+	floor.Material = material
+	floor.TopSurface = Enum.SurfaceType.Smooth
+	floor.BottomSurface = Enum.SurfaceType.Smooth
+	return floor
+end
+
+-- Жилы на дне трещин плиты; над широкими — невидимая крышка, чтобы не застревать.
+local function crackFill(parent, cuts, withLight)
+	local veins = {}
+	for _, c in cuts do
+		local a, e = Vector3.new(c.a.X, 0, c.a.Z), Vector3.new(c.b.X, 0, c.b.Z)
+		local len = (e - a).Magnitude
+		if len > 0.05 then
+			local w = (c.w + c.w2) / 2
+			local y = BTOP - c.d + 0.15
+			table.insert(
+				veins,
+				glow(deco(parent, {
+					Name = "Vein",
+					Size = Vector3.new(math.max(0.2, w * 0.45), 0.5, len + 0.2),
+					CFrame = CFrame.lookAt((a + e) / 2 + Vector3.new(0, y, 0), e + Vector3.new(0, y, 0)),
+					Color = glowBlue,
+					Material = Enum.Material.Neon,
+				}))
+			)
+			if c.lid then
+				block(parent, {
+					Name = "RiftLid",
+					Size = Vector3.new(w + 0.8, 0.4, len + 0.4),
+					CFrame = CFrame.lookAt((a + e) / 2 + Vector3.new(0, BTOP - 0.2, 0), e + Vector3.new(0, BTOP - 0.2, 0)),
+					Transparency = 1,
+					CanQuery = false,
+					CanTouch = false,
 				})
 			end
 		end
 	end
-	-- Светящиеся кольца в полу: голубое снаружи, два золотых внутри.
-	for _, ring in { { R - 3, Palette.Zones[1].glow, 0.5 }, { R * 0.62, Color3.fromRGB(255, 210, 90), 0.4 }, { R * 0.45, Color3.fromRGB(255, 210, 90), 0.35 } } do
-		local n = 48
-		for k = 0, n - 1 do
-			local a = k / n * math.pi * 2
-			deco(plaza, {
-				Name = "RingGlow",
-				Size = Vector3.new(ring[3], 0.1, ring[1] * 2 * math.pi / n + 0.1),
-				CFrame = CFrame.new(c + Vector3.new(math.cos(a), 0, math.sin(a)) * ring[1] + Vector3.new(0, 0.06, 0)) * CFrame.Angles(0, -a, 0),
-				Color = ring[2],
-				Material = Enum.Material.Neon,
-			})
+	local core = veins[math.max(1, #veins // 2)]
+	if withLight and core then
+		local light = Instance.new("PointLight")
+		light.Color = glowBlue
+		light.Range = 9
+		light.Brightness = 1.6
+		light.Shadows = false
+		light.Parent = core
+	end
+end
+
+local function basePlate(b)
+	return carvedPlate(b.top, BR, PLATE, Enum.Material.Slate, function(add)
+		-- Ров вокруг Монолита.
+		add(Vector3.new(2, MOAT_R * 2, MOAT_R * 2), CFrame.new(b.top) * CFrame.Angles(0, 0, math.rad(90)), Enum.PartType.Cylinder)
+		crackCutters(b.cuts, add)
+		-- Сколы по краю (кроме фронта, где бегут).
+		for _ = 1, 7 do
+			chipCutter(b.top + baseDir(b.frame, rng:NextNumber(55, 305)) * (BR + 0.3), add)
 		end
+	end)
+end
+
+-- Площадь у входа -------------------------------------------------------------------
+-- Полукруглая каменная плита вровень с песком: от каждой базы до входа прямая одинаковой
+-- длины. Между дорожками — трещины с кристаллами на концах (кристаллы без столкновений),
+-- по краю — светящееся кольцо, утопленное в камень.
+do
+	local hub = Instance.new("Model")
+	hub.Name = "Hub"
+	local hubTop = Vector3.new(G.X, BTOP, G.Z)
+	local RING_R = HUB - 2.6
+	local ringSegs = {}
+	for k = 0, 35 do
+		local a0, a1 = math.rad(90 + k * 5), math.rad(90 + (k + 1) * 5)
+		table.insert(ringSegs, {
+			a = hubTop + Vector3.new(math.cos(a0), 0, math.sin(a0)) * RING_R,
+			b = hubTop + Vector3.new(math.cos(a1), 0, math.sin(a1)) * RING_R,
+		})
 	end
-	for _ = 1, 8 do
-		local a = rng:NextNumber(0, math.pi * 2)
-		crack(plaza, c + Vector3.new(math.cos(a), 0, math.sin(a)) * R * 0.5 + Vector3.new(0, 0.07, 0), Vector3.new(math.cos(a), 0, math.sin(a)), R * 0.5, 0.3, Palette.Zones[1].glow, 1)
+	local floor = carvedPlate(hubTop, HUB, HUB_STONE, Enum.Material.Sandstone, function(add)
+		-- Срез по линии входа: дальше — тропа.
+		add(Vector3.new(60, 20, 80), CFrame.new(G.X + 2 + 30, 0, G.Z))
+		for _, r in hubRifts do
+			crackCutters(r.cuts, add)
+			chipCutter(hubTop + r.dir * (HUB + 0.3), add)
+		end
+		-- Канавка кольца: узкая, ноге не мешает.
+		for _, sg in ringSegs do
+			local len = (sg.b - sg.a).Magnitude
+			add(Vector3.new(0.7, 1.6, len + 0.15), CFrame.lookAt((sg.a + sg.b) / 2, sg.b))
+		end
+	end)
+	floor.Parent = hub
+	for _, sg in ringSegs do
+		local len = (sg.b - sg.a).Magnitude
+		local y = BTOP - 0.8 + 0.1
+		glow(deco(hub, {
+			Name = "RingGlow",
+			Size = Vector3.new(0.4, 0.4, len + 0.15),
+			CFrame = CFrame.lookAt((sg.a + sg.b) / 2 + Vector3.new(0, y - BTOP, 0), sg.b + Vector3.new(0, y - BTOP, 0)),
+			Color = Color3.fromRGB(255, 210, 90),
+			Material = Enum.Material.Neon,
+		}))
 	end
-	-- В центре — кристалл-друза; таблица лидеров появится в Шаге 2.
-	block(plaza, {
-		Name = "Pedestal",
-		Size = Vector3.new(7, 1.2, 7),
-		CFrame = CFrame.new(c + Vector3.new(0, 0.6, 0)) * CFrame.Angles(0, math.rad(45), 0),
-		Color = Color3.fromRGB(150, 140, 170),
-		Material = Enum.Material.Slate,
-	})
-	for i = 1, 7 do
-		local a = i / 7 * math.pi * 2
-		crystal(plaza, c + Vector3.new(math.cos(a) * 1.4, 1.2, math.sin(a) * 1.4), rng:NextNumber(3, 5), if i % 2 == 0 then Color3.fromRGB(190, 120, 255) else Color3.fromRGB(120, 220, 255), Vector3.new(math.sin(a) * 0.5, 0, math.cos(a) * 0.5))
-	end
-	crystal(plaza, c + Vector3.new(0, 1.2, 0), 7, Color3.fromRGB(150, 230, 255), Vector3.zero)
-	-- Факелы по кругу.
-	for k = 0, 9 do
-		local a = k / 10 * math.pi * 2 + 0.3
-		torch(plaza, c + Vector3.new(math.cos(a), 0, math.sin(a)) * (R + 9))
+	for i, r in hubRifts do
+		crackFill(hub, r.cuts, true)
+		local tip = G + r.dir * 22.5
+		local side = Vector3.new(-r.dir.Z, 0, r.dir.X)
+		for k = -1, 1 do
+			local color = if (i + k) % 2 == 0 then Color3.fromRGB(190, 130, 255) else Color3.fromRGB(120, 220, 255)
+			local tilt = r.dir * 0.25 + side * k * 0.3
+			crystal(
+				hub,
+				tip + side * k * 1.2 + Vector3.new(0, BTOP - 0.8, 0),
+				if k == 0 then rng:NextNumber(5.5, 7) else rng:NextNumber(3, 4.5),
+				color,
+				Vector3.new(tilt.Z, rng:NextNumber(0, 3), -tilt.X)
+			)
+		end
+		torch(hub, Vector3.new(0, BTOP, 0) + G + r.dir * (HUB + 2.5))
 	end
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "PlazaSpawn"
 	spawn.Anchored = true
 	spawn.Size = Vector3.new(8, 0.4, 8)
-	spawn.Position = c + Vector3.new(8, 0.3, 0)
+	spawn.Position = G + Vector3.new(-10, BTOP + 0.3, 0)
 	spawn.Neutral = true
 	spawn.Duration = 0
 	spawn.Transparency = 1
 	spawn.CanCollide = false
-	spawn.Parent = plaza
-	-- Деревья и камни вокруг арены.
-	for _ = 1, 14 do
-		local a = rng:NextNumber(0, math.pi * 2)
-		local p = c + Vector3.new(math.cos(a), 0, math.sin(a)) * rng:NextNumber(R + 13, R + 24)
-		if p.X < c.X - 4 or math.abs(p.Z) > 18 then
-			tree(plaza, p, rng:NextNumber(0.9, 1.4))
+	spawn.Parent = hub
+	-- Между базами и за ними — сухие деревья, кусты, камни.
+	local n = Config.Base.Count
+	local stepDeg = (W.BaseArcTo - W.BaseArcFrom) / (n - 1)
+	for i = 0, n do
+		local deg = W.BaseArcFrom + stepDeg * (i - 0.5)
+		for _ = 1, 4 do
+			local a = math.rad(deg + rng:NextNumber(-6, 6))
+			local r = W.BaseRingRadius + rng:NextNumber(-8, 22)
+			local x, z = G.X + math.cos(a) * r, G.Z + math.sin(a) * r
+			if plateEdge(x, z) > 4 and laneDist(x, z) > 5 and trenchDepth(x, z) == 0 and x < G.X - 2 then
+				local roll = rng:NextNumber()
+				if roll < 0.3 then
+					deadTree(hub, x, z, rng:NextNumber(0.9, 1.3))
+				elseif roll < 0.65 then
+					shrub(hub, x, z, rng:NextNumber(0.9, 1.4))
+				else
+					boulder(hub, x, z, rng:NextNumber(1.5, 3.5), Color3.fromRGB(150, 140, 128), Enum.Material.Slate)
+				end
+			end
 		end
 	end
-	plaza.Parent = map
+	hub.Parent = map
 end
 task.wait()
 
--- Базы на дуге вокруг входа: до входа у всех одинаково --------------------------
+-- Базы -----------------------------------------------------------------------------
 local bases = folder(map, "Bases")
-local R, H = W.BaseRadius, W.BaseHeight
-local count = Config.Base.Count
-for index = 1, count do
-	local deg = W.BaseArcFrom + (W.BaseArcTo - W.BaseArcFrom) * (index - 1) / (count - 1)
-	local a = math.rad(deg)
-	local center = G + Vector3.new(math.cos(a), 0, math.sin(a)) * W.BaseRingRadius
-	local top = Vector3.new(center.X, H, center.Z)
-	local frame = CFrame.lookAt(top, Vector3.new(G.X, H, G.Z)) -- «вперёд» базы — ко входу в зону
+for _, b in baseList do
+	local index, top, frame = b.index, b.top, b.frame
 	local base = Instance.new("Model")
 	base.Name = "Base" .. index
 
-	-- Утёс-платформа: песчаный верх, каменный обод, скальное основание.
+	basePlate(b).Parent = base
+	-- Под Монолитом ров не нужен: опора, а по дну рва — светящееся кольцо.
 	block(base, {
-		Name = "Platform",
+		Name = "MoatCore",
 		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(1.2, R * 2, R * 2),
-		CFrame = CFrame.new(center.X, H - 0.6, center.Z) * CFrame.Angles(0, 0, math.rad(90)),
-		Color = Palette.Base,
-		Material = Enum.Material.Sand,
+		Size = Vector3.new(1, 12.4, 12.4),
+		CFrame = CFrame.new(top - Vector3.new(0, 0.5, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+		Color = PLATE,
+		Material = Enum.Material.Slate,
 	})
-	block(base, {
-		Name = "Cliff",
+	local moat = glow(deco(base, {
+		Name = "MoatGlow",
 		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(H + 2, R * 2 + 1, R * 2 + 1),
-		CFrame = CFrame.new(center.X, H / 2 - 1.6, center.Z) * CFrame.Angles(0, 0, math.rad(90)),
-		Color = Color3.fromRGB(150, 112, 84),
-		Material = Enum.Material.Sandstone,
-	})
-	for k = 0, 27 do
-		local ang = k / 28 * math.pi * 2
-		local dir = frame:VectorToWorldSpace(Vector3.new(math.sin(ang), 0, -math.cos(ang)))
-		-- Спереди проход для лестницы.
-		if math.abs(ang) > 0.35 and math.abs(ang - math.pi * 2) > 0.35 then
-			block(base, {
-				Name = "Rim",
-				Size = Vector3.new(2, 1.4, R * 2 * math.pi / 28 + 0.4),
-				CFrame = CFrame.lookAt(top + dir * (R - 1) + Vector3.new(0, 0.7, 0), top + dir * R) * CFrame.Angles(0, math.rad(90), 0),
-				Color = Color3.fromRGB(140, 136, 140),
-				Material = Enum.Material.Slate,
-			})
-		end
-	end
-	-- Лестница к входу.
-	for s = 1, 6 do
-		block(base, {
-			Name = "Stair",
-			Size = Vector3.new(9, H * (7 - s) / 6, 2.2),
-			CFrame = frame * CFrame.new(0, -H + H * (7 - s) / 12, -(R - 0.5 + s * 2.2)),
-			Color = Color3.fromRGB(150, 146, 150),
-			Material = Enum.Material.Slate,
-		})
-	end
-	-- Светящиеся трещины по песку базы.
-	for _ = 1, 6 do
-		local ang = rng:NextNumber(0, math.pi * 2)
-		crack(base, top + Vector3.new(math.cos(ang), 0, math.sin(ang)) * R * 0.55 + Vector3.new(0, 0.05, 0), Vector3.new(math.cos(ang), 0, math.sin(ang)), R * 0.4, 0.3, Palette.Zones[1].glow, 1)
+		Size = Vector3.new(0.3, MOAT_R * 2 - 0.1, MOAT_R * 2 - 0.1),
+		CFrame = CFrame.new(top - Vector3.new(0, 1, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+		Color = glowBlue,
+		Material = Enum.Material.Neon,
+	}))
+	local ml = Instance.new("PointLight")
+	ml.Color = glowBlue
+	ml.Range = 10
+	ml.Brightness = 1.2
+	ml.Shadows = false
+	ml.Parent = moat
+	crackFill(base, b.cuts, false)
+	-- Разломы, ушедшие в песок: жилы на дне и свет.
+	for _, line in b.riftsOut do
+		riftFill(base, line, 0, trenchHalf)
 	end
 
 	-- Монолит (ярусы растут поверх — сервер, Monolith.luau).
 	monolith(base, top, Color3.fromRGB(160, 215, 255))
 
 	-- Кольцо постаментов вокруг Монолита: 10 мест, работают первые 3 + 1 за ярус.
+	-- Пока база свободна, все гаснут: светятся только у хозяина (сервер, Arsenal.luau).
 	for k = 1, Config.Monolith.MaxPedestals do
 		local a = math.rad((k - 1) * 360 / Config.Monolith.MaxPedestals + 18)
-		local pcf = frame * CFrame.Angles(0, a, 0) * CFrame.new(0, 0, -10)
+		local pcf = frame * CFrame.Angles(0, a, 0) * CFrame.new(0, 0, -PED_R)
 		local ped = block(base, {
 			Name = "Pedestal" .. k,
 			Size = Vector3.new(2.2, 2.6, 2.2),
 			CFrame = pcf * CFrame.new(0, 1.3, 0) * CFrame.Angles(0, math.rad(45), 0),
 			Color = Color3.fromRGB(130, 126, 150),
 			Material = Enum.Material.Slate,
-			Transparency = if k <= Config.Monolith.BasePedestals then 0 else 0.7,
+			Transparency = 0.7,
 		})
 		deco(ped, {
 			Name = "Top",
@@ -963,7 +1331,7 @@ for index = 1, count do
 			CFrame = pcf * CFrame.new(0, 2.75, 0) * CFrame.Angles(0, math.rad(45), 0),
 			Color = Color3.fromRGB(110, 140, 170),
 			Material = Enum.Material.Neon,
-			Transparency = if k <= Config.Monolith.BasePedestals then 0.2 else 0.85,
+			Transparency = 0.85,
 		})
 		ped:SetAttribute("Base", index)
 		ped:SetAttribute("Index", k)
@@ -973,7 +1341,7 @@ for index = 1, count do
 	block(base, {
 		Name = "SpawnPoint",
 		Size = Vector3.new(2, 1, 2),
-		CFrame = frame * CFrame.new(0, 3, -17),
+		CFrame = frame * CFrame.new(0, 3, -(BR - 2.5)),
 		Transparency = 1,
 		CanCollide = false,
 		CanQuery = false,
@@ -981,7 +1349,7 @@ for index = 1, count do
 	local post = block(base, {
 		Name = "Sign",
 		Size = Vector3.new(0.6, 5, 0.6),
-		CFrame = frame * CFrame.new(6.5, 2.5, -(R - 2)),
+		CFrame = frame * CFrame.new(6, 2.5, -(BR - 2.5)),
 		Color = Color3.fromRGB(110, 84, 64),
 		Material = Enum.Material.Wood,
 	})
@@ -1002,14 +1370,14 @@ for index = 1, count do
 	t.TextStrokeTransparency = 0.3
 	t.Parent = bb
 	bb.Parent = post
-	torch(base, (frame * CFrame.new(-6.5, 0, -(R - 2))).Position)
-	torch(base, (frame * CFrame.new(10, 0, -(R - 6))).Position)
+	torch(base, (frame * CFrame.new(-6, 0, -(BR - 2.5))).Position)
 
 	base:SetAttribute("Index", index)
 	CollectionService:AddTag(base, "Base")
 	base.Parent = bases
 	task.wait()
 end
+local count = #baseList
 
 -- Свет: тёплый закат, холодный неон ----------------------------------------------
 for _, c in Lighting:GetChildren() do
