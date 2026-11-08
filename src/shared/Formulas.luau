@@ -178,7 +178,9 @@ function Formulas.pathZ(x: number): number
 	for _, w in W.PathWaves do
 		z += w.amp * math.sin(t / w.length * math.pi * 2)
 	end
-	return z
+	-- Прямой заход: волны нарастают плавно (smoothstep), у входа тропа идёт ровно по оси.
+	local k = math.clamp(t / W.PathLeadIn, 0, 1)
+	return z * k * k * (3 - 2 * k)
 end
 
 function Formulas.zoneAt(pos: Vector3): number

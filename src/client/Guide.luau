@@ -62,7 +62,11 @@ local function current(): Step?
 		return nil
 	end
 	if not reachedRoad then
-		return { text = "Беги на тропу — там лагеря крипов", target = Config.World.RoadStart + Vector3.new(4, 0, 0) }
+		-- До моста ведём к воротам, за мостом — на тропу: напрямик через пропасть не пройти.
+		local root = World.root()
+		local W = Config.World
+		local target = if root and root.Position.X < W.Entrance.X + 2 then W.Entrance else W.RoadStart + Vector3.new(4, 0, 0)
+		return { text = "Беги через мост на тропу — там лагеря крипов", target = target }
 	end
 	if kills == 0 then
 		return { text = `{hitWord()} прямо по крипу — бей!`, target = nearestCreep(nil) }

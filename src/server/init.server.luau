@@ -33,6 +33,7 @@ local Arsenal = require(script.Arsenal)
 local Spheres = require(script.Spheres)
 local Combat = require(script.Combat)
 local Upgrades = require(script.Upgrades)
+local Fall = require(script.Fall)
 
 -- Подписки «игрок вошёл» регистрируются до PlayerState.start(), чтобы никого не пропустить.
 Bases.start()
@@ -43,4 +44,5 @@ Spheres.start()
 Combat.start()
 Creeps.start()
 Zones.start()
+Fall.start()
 PlayerState.start()
